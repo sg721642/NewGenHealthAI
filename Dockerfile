@@ -37,6 +37,4 @@ RUN mkdir -p /app/backend/storage/chat_db /app/backend/storage/vector_store /app
 # Expose the port (Hugging Face Spaces often uses 7860)
 EXPOSE 7860
 
-# Run the application
-# We use uvicorn to serve the FastAPI app which now also serves the frontend
-CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "7860"]
+CMD ["sh", "-c", "python -m uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-7860}"]
