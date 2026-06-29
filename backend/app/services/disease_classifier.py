@@ -508,6 +508,7 @@ class DiseaseClassifier:
     def _download_models_if_missing(self):
         """Download the .pth models from a Hugging Face model repository if they don't exist locally."""
         repo_id = os.environ.get("HF_MODEL_REPO", "Khagesh1/HealthAI-Models")
+        hf_token = os.environ.get("HF_TOKEN")
 
         # Expected filenames
         expected_files = {
@@ -541,7 +542,12 @@ class DiseaseClassifier:
             from huggingface_hub import hf_hub_download
             import shutil
 
+            repo_accessible = True
+
             for kw, filename in expected_files.items():
+                if not repo_accessible:
+                    break
+
                 dest_path = os.path.join(self.base_dir, filename)
                 # Check if it already exists to avoid re-downloading
                 try:
@@ -555,14 +561,23 @@ class DiseaseClassifier:
                         downloaded_path = hf_hub_download(
                             repo_id=repo_id,
                             filename=filename,
-                            repo_type="model"
+                            repo_type="model",
+                            token=hf_token
                         )
                         shutil.copy(downloaded_path, dest_path)
                         logger.info(f"[{kw}] Successfully downloaded and copied model to {dest_path}")
                     except Exception as e:
-                        logger.error(f"[{kw}] Failed to download {filename} from Hugging Face: {e}")
+                        logger.warning(
+                            f"WARNING: Image classification model download failed from repository '{repo_id}'. "
+                            f"Reason: {e}. Image classification features will be disabled/degraded."
+                        )
+                        repo_accessible = False
+                        break
         except Exception as e:
-            logger.error("Failed to initialize model downloader: %s. Ensure huggingface_hub is installed.", e)
+            logger.warning(
+                f"WARNING: HuggingFace model downloader initialization failed: {e}. "
+                "Image classification features will be disabled/degraded."
+            )
 
 
     def _discover_models(self):
