@@ -15,7 +15,11 @@ app_port: 7860
 
 <br/>
 
-**Live Demo: Coming Soon**
+🚀 **Live Demo**
+
+[https://huggingface.co/spaces/sg721642/NewGenHealthAI](https://huggingface.co/spaces/sg721642/NewGenHealthAI)
+
+[![Hugging Face Spaces](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Spaces-blue)](https://huggingface.co/spaces/sg721642/NewGenHealthAI)
 
 <br/>
 
@@ -23,7 +27,7 @@ app_port: 7860
 
 ---
 
-An AI-powered medical assistant with a FastAPI backend and a React frontend for conversational clinical guidance, session-based chat, and image-based disease analysis.
+An AI-powered medical assistant with a FastAPI backend and a React frontend for conversational clinical guidance, session-based chat, and image-based disease analysis. Deployed and publicly accessible through Hugging Face Spaces.
 
 ## Overview
 
