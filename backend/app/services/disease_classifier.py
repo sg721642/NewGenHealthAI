@@ -507,7 +507,7 @@ class DiseaseClassifier:
 
     def _download_models_if_missing(self):
         """Download the .pth models from a Hugging Face model repository if they don't exist locally."""
-        repo_id = os.environ.get("HF_MODEL_REPO", "Khagesh1/HealthAI-Models")
+        repo_id = os.environ.get("HF_MODEL_REPO")
         hf_token = os.environ.get("HF_TOKEN")
 
         # Expected filenames
@@ -534,6 +534,13 @@ class DiseaseClassifier:
 
         if not missing_any:
             logger.info("All medical model files verified present locally.")
+            return
+
+        if not repo_id:
+            logger.warning(
+                "WARNING: HF_MODEL_REPO environment variable is not configured. "
+                "Hugging Face model download skipped. Image classification features will be disabled/degraded."
+            )
             return
 
         logger.info("Some medical model files are missing. Attempting automatic download from Hugging Face Repo: %s...", repo_id)
