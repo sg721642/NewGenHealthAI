@@ -1,0 +1,69 @@
+abrasions
+all
+angina_disease
+basophil
+bengin cases
+benign
+bruises
+burns
+c-nmc_test_final_phase_data
+c-nmc_test_prelim_phase_data
+calculus
+cardio_disease_
+coronary_artery_disease
+covid
+cropped
+cut
+cyst
+diabetic wounds
+done
+eosinophil
+erythroblast
+gingivitis
+glioma
+hem
+hypodontia
+hypotension_disease_
+ig
+im_dyskeratotic
+im_koilocytotic
+im_metaplastic
+im_parabasal
+im_superficial-intermediate
+infected
+jpegimages
+laseration
+lymphocyte
+malignant
+malignant cases
+meningioma
+monkey pox
+monkeypox
+monkeypox_augmented
+monocyte
+neutrophil
+non-covid
+normal
+normal cases
+notinfected
+notumor
+others
+others_augmented
+parasitized
+pituitary
+platelet
+pressure wounds
+preview
+stone
+stroke
+surgical wounds
+test
+test cases
+tooth discoloration original dataset
+train
+tumor
+ulcer original dataset
+uninfected
+val
+valid
+venous wounds

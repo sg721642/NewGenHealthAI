@@ -1,0 +1,47 @@
+Age-Related Macular Degeneration
+Anterior Ischemic Optic Neuropathy
+Asteroid Hyalosis
+Branch Retinal Artery Occlusion
+Branch Retinal Vein Occlusion
+Central Retinal Artery Occlusion
+Central Retinal Vein Occlusion
+Central Serous Retinopathy
+Chorioretinal Scar
+Choroidal Folds
+Collaterals
+Coloboma
+Cotton Wool Spots
+Cystoid Macular Edema
+Diabetic Retinopathy
+Drusen
+Epiretinal Membrane
+Exudation or Exudates
+Glaucoma
+Healthy Eye (No observable ocular disease)
+Hemorrhagic Pigment Epithelial Detachment
+Hemorrhagic Retinopathy
+Laser Scar
+Macroaneurysm
+Macular Hole
+Macular Scar
+Media Haze
+Myelinated Nerve Fibers
+Myopia
+Optic Disc Cupping
+Optic Disc Edema
+Optic Disc Pallor
+Optic Disc Pit Maculopathy
+Phototoxicity or Pigmentary changes
+Plaque
+Post-Traumatic Choroidal Rupture
+Preretinal Hemorrhage
+Retinal Pigment Epithelium Changes
+Retinal Tear
+Retinitis Pigmentosa
+Retinoschisis
+Staphyloma
+Tessellation
+Tortuous Vessels
+Tractional Detachment
+Vasculitis
+Vitreous Hemorrhage

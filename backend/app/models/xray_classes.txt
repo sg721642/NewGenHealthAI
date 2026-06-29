@@ -1,0 +1,10 @@
+elbow
+finger
+forearm
+fracture
+hand
+humerus
+other
+pneumonia
+shoulder
+wrist
