@@ -9,7 +9,7 @@
 | Branch | `fix/healthai-audit-premium-ui` |
 | Baseline commit (audited) | `1605ec87683e735857ad3c0353fa0ce8feceffbe` |
 | Phase 0 commit | `6225e392d47da15ee6c17537651a1d95ec986c75` |
-| Current commit | `d8c7143770200d5952267f9800b28357c2e522fd` (Phase 1A) |
+| Current commit | `3d6cdeb1aa98af03614fadb213f334fe16901de3` (Phase 1A) |
 | Git identity | `sg721642 <sg721642@gmail.com>` |
 | Maintainer | Satyam Gupta |
 
