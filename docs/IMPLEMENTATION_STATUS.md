@@ -10,7 +10,8 @@
 | Baseline commit (audited) | `1605ec87683e735857ad3c0353fa0ce8feceffbe` |
 | Phase 0 commit | `6225e392d47da15ee6c17537651a1d95ec986c75` |
 | Phase 1A commit | `9d1ef3905c6570699f888a0deeacda0d67381147` |
-| Phase 1B commit | `08657c62468b20988bf4d9009d3faa2ae96faa08` |
+| Phase 1B commit | `45d8231f26e56705df1c45d9105016a5b820afd9` |
+
 | Current phase | Phase 1B — Security and Migration Corrections |
 
 | Git identity | `sg721642 <sg721642@gmail.com>` |
