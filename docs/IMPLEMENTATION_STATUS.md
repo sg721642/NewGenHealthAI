@@ -13,7 +13,7 @@
 | Phase 1B commit | `45d8231f26e56705df1c45d9105016a5b820afd9` |
 | Phase 1C commit | `bbeb67c5eb1e4e728b4d8ad5632f656b9e8e125a` |
 | Phase 1C.1 commit | `d4bc0c14a699b3a37fae0b38839b7ba944503d04` |
-| Phase 1D commit | Pending commit |
+| Phase 1D commit | `256c86d649d0dd67c916892664d7f41d7919fabc` |
 
 | Current phase | Phase 1D — Conversation Memory Isolation, Concurrency and Persistence |
 
