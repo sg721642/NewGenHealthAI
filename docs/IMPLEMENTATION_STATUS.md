@@ -11,8 +11,8 @@
 | Phase 0 commit | `6225e392d47da15ee6c17537651a1d95ec986c75` |
 | Phase 1A commit | `9d1ef3905c6570699f888a0deeacda0d67381147` |
 | Phase 1B commit | `45d8231f26e56705df1c45d9105016a5b820afd9` |
-| Phase 1C commit | `03a6477d130548ae425121c2eb20562eec4c5145` |
-| Phase 1C.1 commit | Pending commit |
+| Phase 1C commit | `bbeb67c5eb1e4e728b4d8ad5632f656b9e8e125a` |
+| Phase 1C.1 commit | `d4bc0c14a699b3a37fae0b38839b7ba944503d04` |
 
 | Current phase | Phase 1C.1 — Correct Remaining Authentication and Database Migration Risks |
 
