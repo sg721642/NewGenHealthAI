@@ -1,20 +1,21 @@
-from fastapi import APIRouter, UploadFile, File
+from fastapi import APIRouter, Depends, File, UploadFile
 from fastapi.responses import JSONResponse
 from PIL import Image
 import io
-import torch
 
-from app.services.disease_classifier import disease_classifier
-from app.tools.vector_store import get_retriever
-from app.tools.llm_client import get_llm
+from app.core.dependencies import get_current_user
 from app.core.logging_config import logger
+from app.models.message import User
 
 router = APIRouter()
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
+try:
+    import torch
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+except ImportError:
+    torch = None
+    device = "cpu"
 
-# Initialize multi-model classifier at startup
-disease_classifier.initialize_models()
 
 # -------------------------------------------------------
 # BLIP model — lazy-loaded, only used for non-medical images
@@ -42,6 +43,9 @@ def _get_blip():
 
 def get_medical_info(disease_name: str, category: str) -> dict:
     """Retrieve symptoms, causes, and treatment using RAG + LLM."""
+    from app.tools.vector_store import get_retriever
+    from app.tools.llm_client import get_llm
+
     retriever = get_retriever()
     llm = get_llm()
 
@@ -100,6 +104,8 @@ def get_medical_info(disease_name: str, category: str) -> dict:
 @router.get("/api/v1/diagnostics")
 async def get_diagnostics():
     """Check which models are currently loaded in memory."""
+    from app.services.disease_classifier import disease_classifier
+
     loaded = list(disease_classifier.models.keys())
     all_configs = disease_classifier.model_configs
 
@@ -126,10 +132,15 @@ async def get_diagnostics():
 # ───────────────────────────────────────────────────────
 
 @router.post("/api/v1/analyze-image")
-async def analyze_image(file: UploadFile = File(...)):
+async def analyze_image(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+):
     try:
         contents = await file.read()
         image = Image.open(io.BytesIO(contents)).convert("RGB")
+
+        from app.services.disease_classifier import disease_classifier
 
         # ── 1. Disease classification (CLIP routes to the right model) ──
         prediction = disease_classifier.classify(image)

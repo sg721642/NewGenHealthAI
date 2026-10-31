@@ -1,21 +1,24 @@
 """
 NewGenHealthAI — api/v1/endpoints/session.py
 Session management endpoints: /history, /sessions, /session/{id}.
-Supports per-user isolation when Authorization token is provided.
+Strictly requires authenticated user; enforces server-side conversation ownership.
 """
 
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
+from app.core.dependencies import get_current_user
+from app.models.message import User
+from app.services.chat_service import clinical_engine
 from app.services.database_service import db_service
 
 router = APIRouter(tags=["Session"])
 
 
 def _get_session_id(request: Request) -> str:
-    """Get or create a session ID from X-Session-ID header or cookie session."""
+    """Get or generate a session ID from X-Session-ID header or cookie session."""
     session_id = request.headers.get("X-Session-ID")
     if session_id:
         return session_id
@@ -24,50 +27,78 @@ def _get_session_id(request: Request) -> str:
     return request.session["session_id"]
 
 
-def _get_user_id(request: Request) -> Optional[int]:
-    """Extract user_id from Authorization Bearer token, or None if unauthenticated."""
-    auth_header = request.headers.get("Authorization")
-    if auth_header and auth_header.startswith("Bearer "):
-        token = auth_header.split(" ")[1]
-        return db_service.get_user_id_by_token(token)
-    return None
-
-
 @router.get("/history")
-async def get_history_endpoint(req: Request):
-    """Return the chat history for the current session (user-isolated)."""
-    user_id = _get_user_id(req)
+async def get_history_endpoint(
+    req: Request, current_user: User = Depends(get_current_user)
+):
+    """
+    Return the chat history for the current session.
+    Fails with 401 if unauthenticated, 404 if conversation not owned.
+    """
+    session_id = _get_session_id(req)
+    messages = db_service.get_chat_history(session_id, user_id=current_user.id)
+    if messages is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found",
+        )
     return {
-        "messages": db_service.get_chat_history(_get_session_id(req), user_id=user_id),
+        "messages": messages,
+        "session_id": session_id,
         "success": True,
     }
 
 
 @router.get("/sessions")
-async def get_sessions_endpoint(req: Request):
-    """Return a list of all chat sessions for the current user."""
-    user_id = _get_user_id(req)
-    return {"sessions": db_service.get_all_sessions(user_id=user_id), "success": True}
+async def get_sessions_endpoint(
+    req: Request, current_user: User = Depends(get_current_user)
+):
+    """Return all chat sessions belonging to the authenticated user."""
+    return {
+        "sessions": db_service.get_all_sessions(user_id=current_user.id),
+        "success": True,
+    }
 
 
 @router.get("/session/{session_id}")
-async def load_session_endpoint(session_id: str, req: Request):
-    """Load a specific session by ID and set it as the active session."""
-    user_id = _get_user_id(req)
+async def load_session_endpoint(
+    session_id: str, req: Request, current_user: User = Depends(get_current_user)
+):
+    """
+    Load a specific session by ID and set it as active session.
+    Fails with 404 if session does not exist or belongs to another user.
+    """
+    messages = db_service.get_chat_history(session_id, user_id=current_user.id)
+    if messages is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found",
+        )
+
     req.session["session_id"] = session_id
     return {
-        "messages": db_service.get_chat_history(session_id, user_id=user_id),
+        "messages": messages,
         "session_id": session_id,
         "success": True,
     }
 
 
 @router.delete("/session/{session_id}")
-async def delete_session_endpoint(session_id: str, req: Request):
-    """Delete a session (user-isolated) and reset active session if it matches."""
-    user_id = _get_user_id(req)
-    db_service.delete_session(session_id, user_id=user_id)
+async def delete_session_endpoint(
+    session_id: str, req: Request, current_user: User = Depends(get_current_user)
+):
+    """
+    Delete a conversation and in-memory state, strictly verifying ownership.
+    Fails with 404 if session not owned or not found.
+    """
+    deleted = clinical_engine.delete_conversation(session_id, user_id=current_user.id)
+    if not deleted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found",
+        )
+
     if req.session.get("session_id") == session_id:
         req.session["session_id"] = str(uuid.uuid4())
-    return {"message": "Session deleted", "success": True}
 
+    return {"message": "Session deleted", "success": True}

@@ -3,7 +3,7 @@ NewGenHealthAI — models/message.py
 SQLAlchemy ORM model for chat messages.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 import hashlib
 from typing import Dict
 
@@ -21,7 +21,7 @@ class User(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     username = Column(String(255), unique=True, nullable=False, index=True)
     hashed_password = Column(String(255), nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
     def to_dict(self) -> Dict:
         return {
@@ -49,7 +49,30 @@ class UserSession(Base):
 
     token = Column(String(255), primary_key=True)
     user_id = Column(Integer, nullable=False, index=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+class Conversation(Base):
+    """Explicit persistent conversation entity owned by a user."""
+
+    __tablename__ = "conversations"
+
+    id = Column(String(255), primary_key=True)
+    user_id = Column(Integer, nullable=False, index=True)
+    title = Column(String(255), nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+    is_quarantined = Column(Integer, default=0, nullable=False)
+
+    def to_dict(self) -> Dict:
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "title": self.title,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "is_quarantined": bool(self.is_quarantined),
+        }
 
 
 class Message(Base):
@@ -63,7 +86,7 @@ class Message(Base):
     role = Column(String(50), nullable=False)          # "user" | "assistant"
     content = Column(Text, nullable=False)
     source = Column(String(255), nullable=True)        # e.g. "Wikipedia Medical Information"
-    timestamp = Column(DateTime, default=datetime.utcnow, nullable=False)
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
     def to_dict(self) -> Dict:
         return {

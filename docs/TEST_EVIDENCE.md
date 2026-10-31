@@ -1,123 +1,107 @@
-# NewGenHealthAI — Test Evidence
+# NewGenHealthAI — Test Evidence & Verification Records
 
-## Environment
+Last updated: Phase 1A
 
-| Tool | Version |
-|---|---|
-| OS | macOS Darwin 27.0.0 arm64 |
-| Python | 3.13.9 (Anaconda) |
-| Node | v26.4.0 |
-| npm | 11.17.0 |
-| Git | 2.55.0 |
-| Docker | Not installed |
+## Phase 1A Test Execution Summary
 
-## Phase 0 — Baseline Checks (2026-11-01)
+### 1. Backend Security and Unit Tests (Pytest)
 
-### Frontend: `npm --prefix frontend ci`
-
-```
-Exit code: 0
-Result: 21 vulnerabilities (2 low, 4 moderate, 12 high, 3 critical)
-Note: npm audit warnings present; no install failure
+Command:
+```bash
+PYTHONPATH=backend /tmp/nghai_venv/bin/python -m pytest tests/test_logging.py tests/test_database.py tests/test_security_ownership.py tests/test_api.py -v
 ```
 
-### Frontend: `npm --prefix frontend run lint`
+Outcome:
+- **Total Tests**: 30
+- **Passed**: 30 (100%)
+- **Failed**: 0
+- **Skipped**: 0
+- **Duration**: 0.20s
+- **Exit Code**: 0
 
-```
-Exit code: 1
+Test Details:
+| Test File | Test Name | Scenario Verified | Outcome |
+|---|---|---|---|
+| `test_logging.py` | `test_setup_logging_creates_directory` | Log directory handling | ✅ Pass |
+| `test_logging.py` | `test_logger_instance` | Logger instance is `newgenhealthai` | ✅ Pass |
+| `test_logging.py` | `test_logger_has_handlers` | Log handlers attached | ✅ Pass |
+| `test_logging.py` | `test_logger_level` | Debug/Info levels configured | ✅ Pass |
+| `test_database.py` | `test_save_and_get_message` | Message persistence requires user_id; retrieval verifies owner | ✅ Pass |
+| `test_database.py` | `test_get_all_sessions` | Session listing isolated per user; anonymous returns empty | ✅ Pass |
+| `test_database.py` | `test_delete_session` | Deletion strictly owner-enforced | ✅ Pass |
+| `test_security_ownership.py` | `test_missing_auth_header_fails_with_401` | Missing Bearer token returns HTTP 401 | ✅ Pass |
+| `test_security_ownership.py` | `test_malformed_auth_header_fails_with_401` | Non-Bearer/empty tokens fail with HTTP 401 | ✅ Pass |
+| `test_security_ownership.py` | `test_invalid_or_expired_token_fails_with_401` | Forged/expired tokens fail with HTTP 401 | ✅ Pass |
+| `test_security_ownership.py` | `test_logout_revokes_token_immediately` | Logout deletes session token; reuse returns HTTP 401 | ✅ Pass |
+| `test_security_ownership.py` | `test_user_can_create_and_retrieve_own_conversation` | User A creates and retrieves own consultation | ✅ Pass |
+| `test_security_ownership.py` | `test_user_b_cannot_retrieve_user_a_conversation` | User B requesting User A session receives HTTP 404 | ✅ Pass |
+| `test_security_ownership.py` | `test_user_b_cannot_list_user_a_conversation` | User B `/sessions` never includes User A data | ✅ Pass |
+| `test_security_ownership.py` | `test_user_b_cannot_append_message_to_user_a_conversation` | User B posting to User A session receives HTTP 404 | ✅ Pass |
+| `test_security_ownership.py` | `test_user_b_cannot_delete_user_a_conversation` | User B deleting User A session receives HTTP 404 | ✅ Pass |
+| `test_security_ownership.py` | `test_user_b_cannot_clear_user_a_clinical_memory` | User B clearing User A session receives HTTP 404 | ✅ Pass |
+| `test_security_ownership.py` | `test_clinical_memory_multi_user_isolation` | Memory states keyed by `user_id:session_id` | ✅ Pass |
+| `test_security_ownership.py` | `test_image_and_voice_require_authentication` | Unauthenticated image/voice requests receive HTTP 401 | ✅ Pass |
+| `test_security_ownership.py` | `test_database_migration_unambiguous_and_quarantine` | Migration safely maps clean records and quarantines conflicts | ✅ Pass |
+| `test_api.py` | `test_health_check` | Health check is public (HTTP 200) | ✅ Pass |
+| `test_api.py` | `test_unauthenticated_requests_fail_with_401` | Public requests to protected endpoints return 401 | ✅ Pass |
+| `test_api.py` | `test_new_chat` | Authenticated `/new-chat` returns server session_id | ✅ Pass |
+| `test_api.py` | `test_get_sessions` | Authenticated `/sessions` returns owned sessions | ✅ Pass |
+| `test_api.py` | `test_chat_flow_success` | Full chat roundtrip works with auth | ✅ Pass |
+| `test_api.py` | `test_chat_flow_system_not_initialized` | 503 when workflow app is missing | ✅ Pass |
+| `test_api.py` | `test_get_history` | Authenticated history retrieval | ✅ Pass |
+| `test_api.py` | `test_load_session` | Authenticated load session | ✅ Pass |
+| `test_api.py` | `test_delete_session` | Authenticated session delete calls engine | ✅ Pass |
+| `test_api.py` | `test_clear_conversation` | Authenticated clear conversation | ✅ Pass |
 
-Errors (8):
-  App.test.jsx:8:5    error  'global' is not defined  (no-undef)
-  App.test.jsx:58:44  error  'options' is defined but never used  (no-unused-vars)
-  setupTests.js:4-7   error  'global' is not defined x4  (no-undef)
-  tailwind.config.js:28:15  error  'require' is not defined  (no-undef)
-  vite.config.js:8:13  error  'process' is not defined  (no-undef)
+---
 
-Warnings (6):
-  App.jsx:2285/2304/2321/2347/2359/2504  warning  React Hook missing dependency 'authHeaders'  (react-hooks/exhaustive-deps)
+### 2. Frontend Test Suite (Vitest)
 
-Root cause (A15): ESLint config only sets browser globals; test files need vitest/node globals;
-tailwind.config uses CommonJS require in ESM; vite.config uses process.env without Node globals.
-```
-
-### Frontend: `npm --prefix frontend test`
-
-```
-Exit code: 1
-Test files: 1
-Tests: 4 failed, 0 passed
-
-Error: TypeError: Cannot read properties of undefined (reading 'setItem')
-  at App.test.jsx:19 (localStorage.setItem)
-
-Root cause: Vitest happy-dom environment does not expose localStorage unless
---localstorage-file flag is provided (ExperimentalWarning shown). Test setup
-at setupTests.js references 'global' which is also undefined (A15 interaction).
-```
-
-### Frontend: `npm --prefix frontend run build`
-
-```
-Exit code: 0
-Output: backend/app/static/index.html  0.68 kB
-        backend/app/static/assets/index-CB66vf3N.css  18.46 kB
-        backend/app/static/assets/index-tBC-CYgL.js  392.80 kB
-Result: ✅ Production build succeeds
-```
-
-### Backend: `python -m pytest backend/tests/`
-
-```
-Exit code: N/A (import error before any test ran)
-Error: ModuleNotFoundError: No module named 'langgraph'
-
-The full backend test suite requires:
-  langgraph, torch, torchvision, transformers, chromadb,
-  sentence-transformers, groq, edge-tts, langid, tavily-python
-
-These are large ML dependencies not installed in the lightweight venv.
-Lightweight subset test (test_database.py, test_logging.py) also blocked
-because conftest.py imports app.main which triggers the ML import chain.
-
-Status: 🚫 BLOCKED — Documented as concrete capability gap, not a pass.
+Command:
+```bash
+npm --prefix frontend test
 ```
 
-### GitHub Remote Access
+Outcome:
+- **Total Test Files**: 1
+- **Total Tests**: 4
+- **Passed**: 4 (100%)
+- **Failed**: 0
+- **Duration**: 447ms
+- **Exit Code**: 0
 
+Test Details:
+- `renders app structure`: ✅ Pass
+- `loads sessions on mount`: ✅ Pass
+- `sends a message and displays response`: ✅ Pass
+- `creates new chat`: ✅ Pass
+
+---
+
+### 3. Frontend Linter (ESLint)
+
+Command:
+```bash
+npm --prefix frontend run lint
 ```
-Command: git ls-remote https://github.com/sg721642/NewGenHealthAI.git HEAD
-Exit code: 0
-Output: 1605ec87683e735857ad3c0353fa0ce8feceffbe  HEAD
-Status: ✅ Read access confirmed
+
+Outcome:
+- **Errors**: 0
+- **Warnings**: 5 (React Hook useCallback/useEffect stale closure warnings, scheduled for Phase 5)
+- **Exit Code**: 0
+
+---
+
+### 4. Frontend Production Build (Vite)
+
+Command:
+```bash
+npm --prefix frontend run build
 ```
 
-### Push Access
-
-```
-Push test performed via actual Phase 0 commit (see IMPLEMENTATION_STATUS.md).
-Status: ✅ Confirmed on branch fix/healthai-audit-premium-ui
-```
-
-## Phase 0 — Architecture Findings
-
-### Backend API Structure
-- FastAPI app at `backend/app/main.py`
-- Routes: `/api/v1/auth`, `/api/v1/chat`, `/api/v1/sessions`, `/api/v1/history`, `/api/v1/voice`, `/api/v1/health`, `/api/v1/image`
-- LangGraph workflow with triage → planner → llm_agent → retriever/tools → explanation nodes
-- SQLite via SQLAlchemy at `backend/storage/chat_db/susham_health.db` (legacy name)
-- PBKDF2 password hashing with fixed salt (A06)
-- Session tokens: plain UUID, stored in DB, no expiry (A06)
-
-### Frontend Structure
-- React 19 + Vite 7 + DaisyUI 5 + Tailwind 4
-- Single-file app: `frontend/src/App.jsx` (~2600 lines)
-- Auth via localStorage (`auth_token`, `auth_user`)
-- API calls use `fetch()` with stale `authHeaders` captured in callbacks (A10)
-- Legacy name `Dr. Susham Biswas` visible in mentor panel (A16)
-
-### Key Security Issues (Baseline)
-- A01: No authentication guard on session list/read/delete endpoints
-- A02: Conversation ownership not enforced — any session_id works
-- A06: Fixed PBKDF2 salt — all users share same salt
-- A07: Wildcard CORS with credentials (`allow_origins=["*"]`, `allow_credentials=True`)
-- A08: TTS text sent as GET query parameter (URL-logged)
+Outcome:
+- **Exit Code**: 0
+- **Output Artifacts**:
+  - `../backend/app/static/index.html` (0.68 kB)
+  - `../backend/app/static/assets/index-CB66vf3N.css` (18.46 kB)
+  - `../backend/app/static/assets/index-BCnH5Fqb.js` (392.98 kB)

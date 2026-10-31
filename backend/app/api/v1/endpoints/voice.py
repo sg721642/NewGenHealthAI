@@ -7,11 +7,14 @@ import os
 import re
 import tempfile
 import logging
-from fastapi import APIRouter, UploadFile, File, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from groq import Groq
 import edge_tts
 from starlette.responses import StreamingResponse
 import langid
+
+from app.core.dependencies import get_current_user, get_current_user_media
+from app.models.message import User
 
 logger = logging.getLogger("newgenhealthai")
 
@@ -47,7 +50,10 @@ def _strip_markdown_for_tts(text: str) -> str:
 
 
 @router.post("/voice/stt")
-async def speech_to_text(file: UploadFile = File(...)):
+async def speech_to_text(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+):
     """
     Transcribe uploaded audio using Groq Whisper.
     Returns: { "text": "...", "language": "en" }
@@ -135,7 +141,10 @@ async def speech_to_text(file: UploadFile = File(...)):
 
 
 @router.get("/voice/tts")
-async def text_to_speech(text: str = Query(...)):
+async def text_to_speech(
+    text: str = Query(...),
+    current_user: User = Depends(get_current_user_media),
+):
     """Convert text to speech using Edge-TTS with auto language detection."""
     try:
         clean_text = _strip_markdown_for_tts(text)

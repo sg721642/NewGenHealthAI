@@ -1650,7 +1650,8 @@ function MessageBubble({ msg, onFollowUpClick }) {
       setIsSpeaking(true);
       // Use fetch+blob for better browser compatibility than new Audio(url)
       const ttsUrl = `/api/v1/voice/tts?text=${encodeURIComponent(msg.content.substring(0, 2000))}`;
-      const res = await fetch(ttsUrl);
+      const token = localStorage.getItem('auth_token');
+      const res = await fetch(ttsUrl, { headers: token ? { 'Authorization': `Bearer ${token}` } : {} });
       if (!res.ok) throw new Error(`TTS failed: ${res.status}`);
       const audioBlob = await res.blob();
       const blobUrl = URL.createObjectURL(audioBlob);
@@ -1793,7 +1794,12 @@ function InputArea({ inputValue, setInputValue, onSend, isTyping, inputRef, onIm
       formData.append('file', audioBlob, `recording${ext}`);
       console.log('[Voice] Sending to STT:', audioBlob.size, 'bytes, ext:', ext);
 
-      const res = await fetch('/api/v1/voice/stt', { method: 'POST', body: formData });
+      const token = localStorage.getItem('auth_token');
+      const res = await fetch('/api/v1/voice/stt', {
+        method: 'POST',
+        body: formData,
+        headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+      });
       const data = await res.json().catch(() => null);
       console.log('[Voice] STT response:', data);
 
@@ -2338,12 +2344,13 @@ export default function App() {
     try {
       const res = await fetch(`${API_BASE}/new-chat`, { method: 'POST', headers: authHeaders() });
       if (res.ok) {
-        setMessages([]); setChatHistory([]); setCurrentSessionId(null);
+        const data = await res.json();
+        setMessages([]); setChatHistory([]); setCurrentSessionId(data.session_id || null);
         setShowWelcome(true); await loadSessions();
         showToast('New conversation started', 'success');
       }
     } catch { showToast('Failed to create chat', 'error'); }
-  }, [loadSessions, showToast]);
+  }, [authHeaders, loadSessions, showToast]);
 
   // Clear chat
   const clearChat = useCallback(async () => {
@@ -2472,7 +2479,11 @@ export default function App() {
     setIsTyping(true);
     try {
       const res = await fetch(`${API_BASE}/chat`, {
-        method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }),
+        method: 'POST',
+        headers: authHeaders({
+          'Content-Type': 'application/json',
+          ...(currentSessionId ? { 'X-Session-ID': currentSessionId } : {}),
+        }),
         body: JSON.stringify({ message }),
       });
       const data = await res.json();

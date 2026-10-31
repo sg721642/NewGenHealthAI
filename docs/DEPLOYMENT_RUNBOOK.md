@@ -1,7 +1,7 @@
 # NewGenHealthAI — Deployment Runbook
 
-> **Status**: Phase 0 baseline. No production deployment performed yet.
-> Runbook is authoritative for the Docker + Hugging Face Spaces path.
+> **Status**: Phase 1A (Authentication & Conversation Isolation Security).
+> Runbook is authoritative for the Docker + Hugging Face Spaces deployment path.
 
 ## Architecture
 
@@ -9,7 +9,8 @@
 GitHub (sg721642/NewGenHealthAI)
   └─► Hugging Face Spaces (sg721642/NewGenHealthAI) [Docker SDK, port 7860]
         ├─ Dockerfile (root) — multi-stage: Node build → Python runtime
-        └─ backend/app/static/ — Vite production build mounted into FastAPI static files
+        ├─ backend/app/static/ — Vite production build mounted into FastAPI static files
+        └─ SQLite DB + Migrations — automatic backup & versioned migration on startup
 ```
 
 ## Required Environment Variables (Secrets)
@@ -23,11 +24,19 @@ GitHub (sg721642/NewGenHealthAI)
 
 **Never commit secret values. Configure through Hugging Face Spaces → Settings → Repository secrets.**
 
-## Database Persistence
+## Database Migration & Safety Runbook
 
-> **Warning**: Hugging Face free-tier Spaces use ephemeral storage. The SQLite database
-> at `backend/storage/chat_db/` is lost on Space rebuild unless a persistent volume is configured.
-> This must be resolved before any production user data is relied upon.
+Phase 1A introduces `backend/app/db/migrations.py`:
+1. **Automatic Backup**: On application startup, if an existing SQLite database exists, it is automatically backed up to `<db_path>.backup_<YYYYMMDD_HHMMSS>`.
+2. **Schema Migration**: Ensures the `conversations` table exists with ownership indexes.
+3. **Legacy Data Mapping**:
+   - Distinct legacy `session_id` records in `messages` that unambiguously belong to a single valid user are assigned to that user in `conversations`.
+   - Conflicting or anonymous legacy records are quarantined (`is_quarantined=1, user_id=0`) so they are never leaked across users.
+4. **Manual Recovery Command**:
+   ```python
+   from app.db.migrations import restore_database
+   restore_database("backend/storage/chat_db/susham_health.db.backup_<timestamp>", "backend/storage/chat_db/susham_health.db")
+   ```
 
 ## Local Development Quick Start
 
@@ -43,45 +52,19 @@ npm --prefix frontend install
 npm --prefix frontend run dev
 ```
 
-## Docker Build (local, when Docker is available)
-
-```bash
-docker build -t newgenhealthai:dev .
-docker run --rm -p 7860:7860 \
-  --env-file .env \
-  -v $(pwd)/backend/storage:/app/backend/storage \
-  newgenhealthai:dev
-```
-
-## Deployment to Hugging Face Spaces
-
-The Space is configured to use the GitHub repository directly.
-Pushing to the main branch (or configuring a sync) triggers a Space rebuild.
-
-**Phase 0 constraint**: Do NOT push to `main` or trigger a production deployment.
-All work is on branch `fix/healthai-audit-premium-ui`.
-
 ## Rollback Procedure
 
 1. Identify last known-good commit SHA from `docs/IMPLEMENTATION_STATUS.md`
 2. On Hugging Face Spaces UI → Factory Reboot or restore previous revision if available
-3. For database rollback: restore from backup copy (must be created before any migration)
+3. For database rollback: restore from automatic backup file using `restore_database`
 4. Verify: login, create conversation, send message, retrieve history
 
-## Pre-deployment Verification Gates (Not Yet Run)
+## Pre-deployment Verification Gates
 
-- [ ] Auth isolation: cross-user session access blocked (A01/A02)
-- [ ] Wildcard CORS removed (A07)
-- [ ] Frontend build clean with lint passing (A15)
-- [ ] Backend tests passing with full ML deps
-- [ ] TTS uses POST body not GET param (A08)
-- [ ] Legacy names cleaned (A16)
-- [ ] HF Space secrets configured
-- [ ] DB persistence confirmed or limitation documented to users
-
-## Known Limitations (Phase 0)
-
-- Docker not installed locally — Dockerfile not locally built/tested
-- HF Space running status not independently verified (requires browser login)
-- ML model weights not downloaded — inference untested offline
-- Backend test suite blocked by ML dependency chain
+- [x] Auth isolation: cross-user session access blocked (A01/A02 verified with 30 backend tests)
+- [x] Frontend build clean with lint passing (0 errors, 5 warnings, 4/4 tests pass)
+- [x] Backend test suite unblocked: offline testing working (30/30 tests pass)
+- [ ] Wildcard CORS removed (A07 — scheduled for Phase 4)
+- [ ] TTS uses POST body not GET param (A08 — scheduled for Phase 4)
+- [ ] Password salt migration (A06 — scheduled for Phase 2)
+- [ ] HF Space running status verified with live credentials

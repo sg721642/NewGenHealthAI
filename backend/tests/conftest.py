@@ -38,22 +38,18 @@ def mock_dependencies():
         "llm_success": True
     }
 
-    # 2. Patch using patch.object on the imported singletons
-    with patch.object(db_service, 'init_db') as mock_db, \
-         patch.object(chat_service.clinical_engine, 'initialize_workflow'), \
+    # 2. Patch external AI/ML dependencies only (never mock database ownership)
+    with patch.object(chat_service.clinical_engine, 'initialize_workflow'), \
          patch.object(chat_service.clinical_engine, 'workflow_app', mock_app_instance), \
-         patch.object(db_service, 'save_message') as mock_save, \
          patch('app.main.process_pdf') as mock_pdf, \
          patch('app.main.get_or_create_vectorstore') as mock_vs:
 
         mock_vs.return_value = MagicMock()
 
         yield {
-            "db": mock_db,
             "pdf": mock_pdf,
             "vector_store": mock_vs,
             "workflow_app": mock_app_instance,
-            "save_message": mock_save,
         }
 
 
