@@ -8,7 +8,7 @@
 | Repository | `https://github.com/sg721642/NewGenHealthAI` |
 | Branch | `fix/healthai-audit-premium-ui` |
 | Baseline commit (audited) | `1605ec87683e735857ad3c0353fa0ce8feceffbe` |
-| Current commit | `8cea2343f1c4cfa762aaa8a3ebfe4c20c2745ab8` (Phase 0) |
+| Current commit | `16848bf0d5c9e242c1b312f6ca2203616e00c04e` (Phase 0) |
 | Git identity | `sg721642 <sg721642@gmail.com>` |
 
 ## Deployment
