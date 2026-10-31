@@ -13,7 +13,7 @@ import edge_tts
 from starlette.responses import StreamingResponse
 import langid
 
-logger = logging.getLogger("dr_susham")
+logger = logging.getLogger("newgenhealthai")
 
 router = APIRouter(tags=["Voice"])
 

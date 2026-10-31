@@ -30,7 +30,7 @@ describe('App Integration', () => {
     it('renders app structure', async () => {
         render(<App />);
         expect(screen.getByText('Medical AI Assistant')).toBeInTheDocument();
-        expect(screen.getByText('NewGenHealthAI')).toBeInTheDocument();
+        expect(screen.getAllByText('NewGenHealthAI').length).toBeGreaterThan(0);
         expect(screen.getByPlaceholderText('Describe your symptoms or ask a medical question…')).toBeInTheDocument();
     });
 
@@ -55,7 +55,7 @@ describe('App Integration', () => {
 
     it('sends a message and displays response', async () => {
         // Setup mocks
-        mockFetch.mockImplementation((url, options) => {
+        mockFetch.mockImplementation((url, _options) => {
             if (url === '/api/v1/chat') {
                 return Promise.resolve({
                     json: () => Promise.resolve({

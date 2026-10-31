@@ -13,8 +13,8 @@ from app.core.config import LOG_DIR
 
 
 def setup_logging(log_dir: str = LOG_DIR) -> logging.Logger:
-    """Setup rotating file + console logging. Returns the 'susham_health' logger."""
-    _logger = logging.getLogger("susham_health")
+    """Setup rotating file + console logging. Returns the 'newgenhealthai' logger."""
+    _logger = logging.getLogger("newgenhealthai")
 
     # Avoid duplicate handlers on re-import
     if _logger.handlers:
@@ -31,7 +31,7 @@ def setup_logging(log_dir: str = LOG_DIR) -> logging.Logger:
             os.makedirs(log_dir)
 
         log_file = os.path.join(
-            log_dir, f"susham_health_{datetime.now().strftime('%Y%m%d')}.log"
+            log_dir, f"newgenhealthai_{datetime.now().strftime('%Y%m%d')}.log"
         )
         file_handler = RotatingFileHandler(log_file, maxBytes=10 * 1024 * 1024, backupCount=5)
         file_handler.setLevel(logging.INFO)
@@ -40,6 +40,7 @@ def setup_logging(log_dir: str = LOG_DIR) -> logging.Logger:
             datefmt="%Y-%m-%d %H:%M:%S",
         ))
         _logger.addHandler(file_handler)
+
 
     import io
     console_handler = logging.StreamHandler(

@@ -1,0 +1,48 @@
+# Version control
+.git
+.gitattributes
+.gitignore
+
+# Node
+node_modules
+frontend/node_modules
+npm-debug.log*
+
+# Python environments and caches
+.venv
+venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.mypy_cache
+*.egg-info
+dist/
+
+# Local environment files (secrets must not be baked into the image)
+.env
+.env.*
+!.env.example
+
+# Development artifacts
+backend/logs/
+backend/storage/chat_db/
+backend/storage/vector_store/
+
+# macOS metadata
+.DS_Store
+**/.DS_Store
+
+# IDE
+.vscode
+.idea
+
+# Build outputs (rebuilt inside Docker)
+backend/app/static/
+
+# Planning and local documents not needed in image
+NewGenHealthAI_Antigravity_Master_Plan.md
+run_medai.bat
+diagnose_env.py
+check_model_on_image.py

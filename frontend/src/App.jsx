@@ -1503,11 +1503,10 @@ function Sidebar({ sidebarOpen, sessions, currentSessionId, onNewChat, onLoadSes
       {/* Footer */}
       <div className="nc-sb-foot">
         <div className="nc-dev-card">
-          <div className="nc-dev-chip"><i className="fas fa-chalkboard-teacher" /> Mentor</div>
-          <div className="nc-dev-name">Dr. Susham Biswas</div>
+          <div className="nc-dev-chip"><i className="fas fa-user-shield" /> Maintainer</div>
+          <div className="nc-dev-name">Satyam Gupta</div>
           <div className="nc-dev-meta">
-            Associate Professor &amp; Ex-HOD(CSE)<br />
-            RGIPT
+            NewGenHealthAI
           </div>
         </div>
 

@@ -24,7 +24,7 @@ def test_setup_logging_creates_directory():
 def test_logger_instance():
     assert logger is not None
     assert isinstance(logger, logging.Logger)
-    assert logger.name == "susham_health"
+    assert logger.name == "newgenhealthai"
 
 
 def test_logger_has_handlers():
