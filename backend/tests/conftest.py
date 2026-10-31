@@ -11,8 +11,29 @@ backend_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if backend_path not in sys.path:
     sys.path.insert(0, backend_path)
 
+# Stub optional heavy AI/ML libraries in sys.modules for offline/lightweight test environments
+for mod_name in [
+    'langchain_community',
+    'langchain_community.tools',
+    'langchain_community.tools.tavily_search',
+    'langchain_community.utilities',
+    'langchain_community.utilities.wikipedia',
+    'langchain_community.document_loaders',
+    'langchain_community.vectorstores',
+    'langchain_groq',
+    'langchain_huggingface',
+    'langchain_huggingface.embeddings',
+    'langchain_text_splitters',
+]:
+    if mod_name not in sys.modules:
+        try:
+            __import__(mod_name)
+        except ImportError:
+            sys.modules[mod_name] = MagicMock()
+
 from app.main import app  # noqa: E402
 from app.services import chat_service, db_service  # noqa: E402
+
 
 
 @pytest.fixture(scope="function")

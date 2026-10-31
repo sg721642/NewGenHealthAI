@@ -147,8 +147,9 @@ def run_database_migration(engine_instance, db_path: Optional[str] = None) -> Di
         inspector = inspect(engine_instance)
         table_names = inspector.get_table_names()
 
-        # Ensure schema_versions table exists
-        if "schema_versions" not in table_names:
+    # Ensure schema_versions table exists
+    if "schema_versions" not in table_names:
+        with engine_instance.begin() as conn:
             conn.execute(text("""
                 CREATE TABLE schema_versions (
                     version INTEGER PRIMARY KEY,
@@ -156,13 +157,15 @@ def run_database_migration(engine_instance, db_path: Optional[str] = None) -> Di
                     description TEXT NOT NULL
                 )
             """))
-            conn.commit()
-            table_names.append("schema_versions")
 
+    with engine_instance.connect() as conn:
         latest_version = conn.execute(text("SELECT MAX(version) FROM schema_versions")).scalar() or 0
 
-        # ── Step 1: Version 1 Migration (Conversations & Ownership Reconstruction) ──
-        if latest_version < 1:
+    # ── Step 1: Version 1 Migration (Conversations & Ownership Reconstruction) ──
+    if latest_version < 1:
+        with engine_instance.begin() as conn:
+            inspector = inspect(engine_instance)
+            table_names = inspector.get_table_names()
             if "conversations" not in table_names:
                 conn.execute(text("""
                     CREATE TABLE conversations (
@@ -175,8 +178,6 @@ def run_database_migration(engine_instance, db_path: Optional[str] = None) -> Di
                     )
                 """))
                 conn.execute(text("CREATE INDEX IF NOT EXISTS idx_conversations_user_id ON conversations (user_id)"))
-                conn.commit()
-                table_names.append("conversations")
                 stats["conversations_table_created"] = True
                 logger.info("Created 'conversations' table with indices.")
 
@@ -213,7 +214,6 @@ def run_database_migration(engine_instance, db_path: Optional[str] = None) -> Di
                             "created_at": created_at,
                             "updated_at": updated_at,
                         })
-                        conn.commit()
                         stats["quarantined_conversations"] += 1
                         continue
 
@@ -225,6 +225,7 @@ def run_database_migration(engine_instance, db_path: Optional[str] = None) -> Di
                     has_null = any(r[0] is None for r in msg_rows)
                     distinct_non_null = [r[0] for r in msg_rows if r[0] is not None]
 
+                    # MIG-02: Fail closed! If users table is absent or owner not in users, cannot confirm owner.
                     user_exists = False
                     if len(distinct_non_null) == 1:
                         owner_id = distinct_non_null[0]
@@ -235,7 +236,7 @@ def run_database_migration(engine_instance, db_path: Optional[str] = None) -> Di
                             ).fetchone()
                             user_exists = bool(u_row)
                         else:
-                            user_exists = True
+                            user_exists = False
 
                     if not has_null and len(distinct_non_null) == 1 and user_exists:
                         owner_id = distinct_non_null[0]
@@ -249,7 +250,6 @@ def run_database_migration(engine_instance, db_path: Optional[str] = None) -> Di
                             "created_at": created_at,
                             "updated_at": updated_at,
                         })
-                        conn.commit()
                         stats["migrated_conversations"] += 1
                         logger.info("Migrated clean session %s to confirmed owner %s", sid[:8], owner_id)
                     else:
@@ -262,7 +262,6 @@ def run_database_migration(engine_instance, db_path: Optional[str] = None) -> Di
                             "created_at": created_at,
                             "updated_at": updated_at,
                         })
-                        conn.commit()
                         stats["quarantined_conversations"] += 1
 
             now_dt = datetime.now(timezone.utc)
@@ -273,11 +272,15 @@ def run_database_migration(engine_instance, db_path: Optional[str] = None) -> Di
                 "applied_at": now_dt,
                 "desc": "Phase 1B: conversations table, conservative ownership reconstruction, schema tracking",
             })
-            conn.commit()
-            latest_version = 1
+        latest_version = 1
 
-        # ── Step 2: Version 2 Migration (user_sessions Token Hashing & Expiration) ──
-        if latest_version < 2:
+    # ── Step 2: Version 2 Migration (user_sessions Token Hashing & Expiration) ──
+    if latest_version < 2:
+        with engine_instance.begin() as conn:
+            inspector = inspect(engine_instance)
+            table_names = inspector.get_table_names()
+            staging_table = f"_user_sessions_staging_{uuid.uuid4().hex[:8]}"
+
             if "user_sessions" not in table_names:
                 conn.execute(text("""
                     CREATE TABLE user_sessions (
@@ -289,28 +292,38 @@ def run_database_migration(engine_instance, db_path: Optional[str] = None) -> Di
                 """))
                 conn.execute(text("CREATE INDEX IF NOT EXISTS idx_user_sessions_user_id ON user_sessions (user_id)"))
                 conn.execute(text("CREATE INDEX IF NOT EXISTS idx_user_sessions_expires_at ON user_sessions (expires_at)"))
-                conn.commit()
                 stats["user_sessions_migrated"] = True
                 logger.info("Created 'user_sessions' table with schema v2.")
             else:
                 session_cols = [c["name"] for c in inspector.get_columns("user_sessions")]
                 if "token_hash" not in session_cols:
-                    logger.info("Upgrading user_sessions to schema v2 (SHA-256 token hashing & expires_at)...")
-                    conn.execute(text("""
-                        CREATE TABLE user_sessions_v2 (
+                    logger.info("Upgrading user_sessions to schema v2 using staging table %s...", staging_table)
+
+                    # Clean up any previously orphaned staging tables matching prefix
+                    for tbl in inspector.get_table_names():
+                        if tbl.startswith("_user_sessions_staging_") or tbl == "user_sessions_v2":
+                            try:
+                                conn.execute(text(f"DROP TABLE IF EXISTS {tbl}"))
+                            except Exception:
+                                pass
+
+                    conn.execute(text(f"""
+                        CREATE TABLE {staging_table} (
                             token_hash VARCHAR(64) PRIMARY KEY,
                             user_id INTEGER NOT NULL,
                             created_at DATETIME NOT NULL,
                             expires_at DATETIME NOT NULL
                         )
                     """))
-                    conn.commit()
 
                     legacy_sessions = conn.execute(text("SELECT token, user_id, created_at FROM user_sessions")).fetchall()
+                    valid_legacy_tokens = set()
+
                     for row in legacy_sessions:
                         raw_tok = str(row[0]).strip() if row[0] else ""
                         if not raw_tok:
                             continue
+                        valid_legacy_tokens.add(raw_tok)
                         tok_hash = hashlib.sha256(raw_tok.encode("utf-8")).hexdigest()
                         uid = row[1]
                         c_at = row[2]
@@ -326,19 +339,43 @@ def run_database_migration(engine_instance, db_path: Optional[str] = None) -> Di
 
                         exp_dt = c_dt + timedelta(hours=24)
 
-                        conn.execute(text("""
-                            INSERT OR REPLACE INTO user_sessions_v2 (token_hash, user_id, created_at, expires_at)
+                        conn.execute(text(f"""
+                            INSERT OR REPLACE INTO {staging_table} (token_hash, user_id, created_at, expires_at)
                             VALUES (:th, :uid, :cat, :exp)
                         """), {"th": tok_hash, "uid": uid, "cat": c_dt, "exp": exp_dt})
-                    conn.commit()
 
+                    # ── VALIDATION PHASE (MIG-01) ──
+                    # 1. Row count validation: staging count must match distinct non-empty legacy tokens
+                    staging_count = conn.execute(text(f"SELECT COUNT(*) FROM {staging_table}")).scalar() or 0
+                    if staging_count != len(valid_legacy_tokens):
+                        raise RuntimeError(
+                            f"Migration validation failed: staging count ({staging_count}) does not match "
+                            f"distinct valid legacy tokens ({len(valid_legacy_tokens)})"
+                        )
+
+                    # 2. Token hash format validation: every row must have 64 hex chars
+                    hashes = conn.execute(text(f"SELECT token_hash FROM {staging_table}")).fetchall()
+                    hex_chars = set("0123456789abcdefABCDEF")
+                    for h_row in hashes:
+                        h_val = str(h_row[0]) if h_row[0] else ""
+                        if len(h_val) != 64 or not all(c in hex_chars for c in h_val):
+                            raise RuntimeError(f"Migration validation failed: invalid SHA-256 token hash: {h_val}")
+
+                    # 3. Schema & column verification
+                    pragma_cols = conn.execute(text(f"PRAGMA table_info({staging_table})")).fetchall()
+                    staging_col_names = [p[1] for p in pragma_cols]
+                    required_cols = ["token_hash", "user_id", "created_at", "expires_at"]
+                    for col in required_cols:
+                        if col not in staging_col_names:
+                            raise RuntimeError(f"Migration validation failed: missing column {col} in {staging_table}")
+
+                    # ── CUTOVER (Atomic within transaction) ──
                     conn.execute(text("DROP TABLE user_sessions"))
-                    conn.execute(text("ALTER TABLE user_sessions_v2 RENAME TO user_sessions"))
+                    conn.execute(text(f"ALTER TABLE {staging_table} RENAME TO user_sessions"))
                     conn.execute(text("CREATE INDEX IF NOT EXISTS idx_user_sessions_user_id ON user_sessions (user_id)"))
                     conn.execute(text("CREATE INDEX IF NOT EXISTS idx_user_sessions_expires_at ON user_sessions (expires_at)"))
-                    conn.commit()
                     stats["user_sessions_migrated"] = True
-                    logger.info("Successfully migrated %d legacy sessions to schema v2.", len(legacy_sessions))
+                    logger.info("Successfully validated and migrated %d sessions to schema v2.", staging_count)
 
             now_dt = datetime.now(timezone.utc)
             conn.execute(text("""
@@ -348,9 +385,8 @@ def run_database_migration(engine_instance, db_path: Optional[str] = None) -> Di
                 "applied_at": now_dt,
                 "desc": "Phase 1C: user_sessions SHA-256 token hashing and explicit session expiration",
             })
-            conn.commit()
-            latest_version = 2
+        latest_version = 2
 
-        stats["schema_version"] = latest_version
+    stats["schema_version"] = latest_version
 
     return stats

@@ -1,6 +1,6 @@
 # NewGenHealthAI — Deployment Runbook
 
-> **Status**: Phase 1B (Security and Migration Corrections).
+> **Status**: Phase 1C.1 (Authentication Hardening and Database Migration Risks Remediation).
 > Runbook is authoritative for the Docker + Hugging Face Spaces deployment path.
 
 ## Architecture
@@ -10,7 +10,7 @@ GitHub (sg721642/NewGenHealthAI)
   └─► Hugging Face Spaces (sg721642/NewGenHealthAI) [Docker SDK, port 7860]
         ├─ Dockerfile (root) — multi-stage: Node build → Python runtime
         ├─ backend/app/static/ — Vite production build mounted into FastAPI static files
-        └─ SQLite DB + Migrations — SQLite Online Backup API & versioned migration on startup
+        └─ SQLite DB + Migrations — SQLite Online Backup API & atomic transactional migration on startup
 ```
 
 ## Required Environment Variables (Secrets)
@@ -23,23 +23,44 @@ GitHub (sg721642/NewGenHealthAI)
 | `LEGACY_PBKDF2_SALT` | Optional (Migration) | Migration-only salt for legacy PBKDF2 password upgrades to Argon2id |
 | `SESSION_EXPIRE_HOURS` | Optional | Session token validity duration in hours (default: `24`) |
 | `ALLOWED_ORIGINS` | Optional | Comma-separated list of allowed CORS origins (default: localhost & 127.0.0.1 ports 5173/8000) |
+| `TRUSTED_PROXIES` | Optional | Comma-separated list of trusted reverse proxy IPs and CIDR networks (default: `127.0.0.1,::1`). Set to include reverse proxy CIDRs (e.g. `10.0.0.0/8,172.16.0.0/12`) on Hugging Face Spaces or cloud proxies. |
 | `CHAT_DB_PATH` | Optional | Override SQLite path (default: `backend/storage/chat_db/susham_health.db`) |
 
 **Never commit secret values. Configure through Hugging Face Spaces → Settings → Repository secrets.**
 
-## Database Migration & Safety Runbook
+## Reverse Proxy & Rate Limiting Architecture (SEC-01, SEC-02)
 
-Phase 1C runs `backend/app/db/migrations.py` (Current Schema Version: 2):
+1. **Trusted Proxy Validation (SEC-01)**:
+   - Direct connecting client peer (`req.client.host`) is validated against configured `TRUSTED_PROXIES`.
+   - If peer is untrusted, all `X-Forwarded-For` headers are treated as spoofed and ignored; the direct peer IP is enforced.
+   - If peer is in `TRUSTED_PROXIES`, the proxy chain is traversed from right to left, skipping trusted proxy hops to locate the authentic client IP.
+   - Malformed IP inputs are rejected safely without system errors.
+
+2. **Bounded Sliding-Window Rate Limiter (SEC-02)**:
+   - Memory-safe bounded sliding window (`BoundedRateLimiter`) with maximum capacity of 10,000 keys and automatic TTL pruning.
+   - `/auth/register`: Rate-limited to 5 attempts per 60 seconds per client IP (returns HTTP 429).
+   - `/auth/login`: Protected by dual rate limiting:
+     - 10 failed attempts per 60 seconds per client IP.
+     - 5 failed attempts per 120 seconds per target username (per-account lockout across distributed IPs).
+     - Successful authentication clears both IP and username failure counters immediately.
+   - **Multi-Worker Note**: The built-in rate limiter is process-local (single-instance). For distributed multi-worker deployments (e.g., Uvicorn with multiple workers or replicated container clusters), rate limiting should be backed by an external distributed store like Redis.
+
+## Database Migration & Safety Runbook (MIG-01, MIG-02, OPS-01)
+
+Phase 1C.1 runs `backend/app/db/migrations.py` (Current Schema Version: 2):
 1. **Pre-check & Runaway Backup Prevention**: The migration runner checks `schema_versions` first. If the schema is already at or above `CURRENT_SCHEMA_VERSION` (2), migration and backup creation are skipped entirely.
 2. **SQLite Online Backup API**: If a schema migration is required and a database exists, a point-in-time snapshot is created using SQLite's Online Backup API (`src.backup(dst)`). This guarantees consistency even with active WAL mode concurrency.
-3. **Integrity Validation**: All backups and restores are validated with `PRAGMA integrity_check` before proceeding.
-4. **Schema Version 1 Tracking**:
+3. **Backup Preservation Discipline (OPS-01)**: No blanket file deletion commands (`rm -f *.backup_*`) are ever run against `backend/storage/chat_db/`. All test suites use isolated `tmp_path` environments.
+4. **Integrity Validation**: All backups and restores are validated with `PRAGMA integrity_check` before proceeding.
+5. **Schema Version 1 Tracking & Fail-Closed Quarantine (MIG-02)**:
    - `conversations` table ensures explicit conversation ownership.
-   - Conservative ownership reconstruction: only clean single-owner sessions are mapped to owners; ambiguous/conflicting/null sessions are strictly quarantined (`is_quarantined=1, user_id=0`) without altering original message records.
-5. **Schema Version 2 Tracking**:
-   - `user_sessions` upgraded to store SHA-256 token hashes (`token_hash VARCHAR(64) PRIMARY KEY`) and explicit expiration (`expires_at`).
-   - Legacy raw session tokens are hashed to SHA-256 and given a 24-hour expiration window.
-6. **Recovery Procedure**:
+   - If `users` table is missing or user does not exist in `users`, sessions fail closed into quarantine (`is_quarantined=1, user_id=0`). Original message records are preserved intact without modification or backfilling.
+6. **Atomic Transactional Migration (MIG-01)**:
+   - Upgrades `user_sessions` to schema v2 via an isolated staging table (`_user_sessions_staging_<uuid>`).
+   - Validates row counts (staging count == distinct valid legacy tokens), SHA-256 hash formatting (64 hex characters), and table schema within a single transactional boundary (`engine.begin()`).
+   - If validation fails, transaction rolls back automatically without dropping or modifying legacy `user_sessions`.
+   - On successful validation, table cutover and schema version 2 tracking commit atomically.
+7. **Recovery Procedure**:
    ```python
    from app.db.migrations import restore_database
    restore_database("backend/storage/chat_db/susham_health.db.backup_<timestamp>_<uuid>", "backend/storage/chat_db/susham_health.db")
@@ -74,9 +95,11 @@ npm --prefix frontend run dev
 - [x] Frontend audio playback manages and revokes Blob URLs cleanly (A08)
 - [x] Arbitrary client-supplied conversation IDs rejected with 404 (A02)
 - [x] SQLite Online Backup API and integrity verification implemented (A01, A02)
-- [x] Conservative legacy ownership reconstruction (no NULL backfill) verified (A02)
+- [x] Conservative legacy ownership reconstruction (no NULL backfill) verified (A02, MIG-02)
+- [x] Untrusted reverse proxy headers ignored, trusted proxy CIDR traversal enforced (SEC-01)
+- [x] Bounded in-memory sliding-window rate limiting on register and login with per-account lockouts (SEC-02)
+- [x] Atomic transactional staging migrations with pre-cutover validation and rollback (MIG-01)
+- [x] Complete backend test suite inventory verified (124 passed, 1 skipped)
 - [x] Frontend build clean with lint passing (0 errors, 0 warnings, 4/4 tests pass)
-- [x] Backend test suite unblocked: offline testing working (35/35 tests pass)
-- [ ] Wildcard CORS removed (A07 — scheduled for Phase 4)
-- [ ] Password salt migration (A06 — scheduled for Phase 2)
-- [ ] HF Space running status verified with live credentials
+- [ ] HF Space running status verified with live credentials (post-deployment)
+

@@ -292,33 +292,34 @@ def test_registration_input_boundary_validation(client):
 
 def test_login_rate_limiting_after_excessive_failed_attempts(client):
     """Excessive failed login attempts from an IP trigger HTTP 429 Too Many Requests."""
-    from app.api.v1.endpoints.auth import _clear_failed_attempts
+    from app.api.v1.endpoints.auth import rate_limiter
 
     test_ip = "192.168.1.99"
-    _clear_failed_attempts(test_ip)
+    rate_limiter.clear(f"login:ip:{test_ip}")
 
     headers = {"X-Forwarded-For": test_ip}
 
-    # Execute 10 failed login attempts (expect 401)
-    for _ in range(10):
+    # Execute 10 failed login attempts with different usernames (tests IP rate limit without per-user lockout)
+    for i in range(10):
         res = client.post(
             "/api/v1/auth/login",
-            json={"username": "non_existent_user", "password": "WrongPassword123!"},
+            json={"username": f"user_ip_test_{i}", "password": "WrongPassword123!"},
             headers=headers,
         )
         assert res.status_code == 401
 
-    # 11th attempt must trigger 429
+    # 11th attempt must trigger 429 for IP
     res_rate_limited = client.post(
         "/api/v1/auth/login",
-        json={"username": "non_existent_user", "password": "WrongPassword123!"},
+        json={"username": "user_ip_test_11", "password": "WrongPassword123!"},
         headers=headers,
     )
     assert res_rate_limited.status_code == 429
     assert "Too many failed login attempts" in res_rate_limited.json()["detail"]
 
     # Cleanup
-    _clear_failed_attempts(test_ip)
+    rate_limiter.clear(f"login:ip:{test_ip}")
+
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

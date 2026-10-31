@@ -12,8 +12,9 @@
 | Phase 1A commit | `9d1ef3905c6570699f888a0deeacda0d67381147` |
 | Phase 1B commit | `45d8231f26e56705df1c45d9105016a5b820afd9` |
 | Phase 1C commit | `03a6477d130548ae425121c2eb20562eec4c5145` |
+| Phase 1C.1 commit | Pending commit |
 
-| Current phase | Phase 1C — Authentication Hardening and Safe Credential Migration |
+| Current phase | Phase 1C.1 — Correct Remaining Authentication and Database Migration Risks |
 
 | Git identity | `sg721642 <sg721642@gmail.com>` |
 | Maintainer | Satyam Gupta |
@@ -29,7 +30,7 @@
 
 ## Current Phase
 
-**Phase 1C — Authentication Hardening and Safe Credential Migration** ✅ Complete
+**Phase 1C.1 — Correct Remaining Authentication and Database Migration Risks** ✅ Complete
 
 ## Completed Tasks
 
@@ -74,27 +75,38 @@
 - [x] **Frontend Session Lifecycle & Privacy**: Verified session validity via `/api/v1/auth/me` on mount; purged stored credentials and sensitive chat state on expiration or logout.
 - [x] **Comprehensive Test Suite**: Added 14 new automated security regression tests in `test_auth_hardening.py`, bringing total passing test suite to 54 tests.
 
+### Phase 1C.1
+- [x] **Untrusted Proxy Header Defense (SEC-01)**: Implemented strict peer IP verification against configurable `TRUSTED_PROXIES` (single IPs and CIDR networks). If peer IP is untrusted, all `X-Forwarded-For` headers are discarded and peer IP is enforced. If peer IP is trusted, walks `X-Forwarded-For` right-to-left to safely extract the authentic client IP.
+- [x] **Bounded Rate Limiter & Memory Protection (SEC-02)**: Replaced unbounded rate limit dictionary with thread-safe `BoundedRateLimiter` capped at 10,000 keys with automatic TTL expiration and oldest-entry pruning under load to prevent memory exhaustion / DoS.
+- [x] **Dual Rate Limiting on Authentication (SEC-02)**: Added IP-level rate limiting on `/auth/register` (5 attempts/min/IP) and dual protection on `/auth/login` combining IP rate limits (10 attempts/min/IP) with per-account failed attempt lockouts (5 failed attempts/account/120s across distributed IPs).
+- [x] **Atomic Staging Schema Migration & Safe Rollback (MIG-01)**: Refactored database migrations to execute inside explicit `engine.begin()` transaction boundaries. Step 2 creates an isolated staging table (`_user_sessions_staging_<uuid>`), strictly validates row counts, SHA-256 formatting (64-char hex), and target columns, and only cuts over if validation passes; triggers immediate atomic rollback and preserves legacy schema intact on failure.
+- [x] **Fail-Closed Missing Users Quarantine (MIG-02)**: Updated Step 1 conversation ownership migration to strictly fail closed when the `users` table is absent or an author is missing, safely quarantining records (`user_id=0, is_quarantined=1`) while preserving all original message records unmodified.
+- [x] **Storage Backup Discipline (OPS-01)**: Preserved all persistent storage files; removed broad deletion patterns; enforced directory-isolated test runs via `tmp_path`.
+- [x] **Complete Backend Test Suite Inventory (OPS-02)**: Executed full 14-module backend test suite (124 passed, 1 skipped, 0 failed), resolved offline LangGraph import guards and dependency stubs in `conftest.py`, and added 13 new regression tests in `test_phase1c1_hardening.py`.
+
 ## Verification Outcomes
 
 | Layer | Check | Tests | Exit Code | Result |
 |---|---|---|---|---|
-| Backend | Pytest (`test_database`, `test_security_ownership`, `test_api`, `test_api_edge_cases`, `test_logging`, `test_app`, `test_auth_hardening`) | 54 / 54 | 0 | ✅ Pass (0 failures) |
+| Backend | Pytest (`test_api`, `test_api_edge_cases`, `test_app`, `test_auth_hardening`, `test_coverage_gaps`, `test_database`, `test_engine`, `test_logging`, `test_phase1c1_hardening`, `test_security_ownership`, `test_services`, `test_tools`, `test_workflow`, `test_workflow_routing`) | 124 / 125 (1 skipped) | 0 | ✅ Pass (0 failures) |
 | Frontend | Vitest integration (`App.test.jsx`) | 4 / 4 | 0 | ✅ Pass (0 failures) |
 | Frontend | Linter (`npm --prefix frontend run lint`) | 0 errors, 0 warnings | 0 | ✅ Pass (100% clean) |
 | Frontend | Build (`npm --prefix frontend run build`) | Vite bundle | 0 | ✅ Pass |
 
 ## Database Migration Status
 
-- Versioned migration runner active: `backend/app/db/migrations.py` (Version 2 tracked in `schema_versions`)
+- Versioned migration runner active: `backend/app/db/migrations.py` (Versions 1 and 2 tracked in `schema_versions`)
+- Atomic transactional boundaries enforced via `engine.begin()`
 - Pre-migration SQLite online backup executed with `PRAGMA integrity_check` validation only when schema migration is required
+- Schema v1: conversations table and conservative ownership reconstruction with fail-closed quarantine (`is_quarantined=1, user_id=0`)
+- Schema v2: user_sessions SHA-256 token hashing and explicit session expiration with isolated staging table cutover & validation
 - WAL-mode safe snapshotting and restore verified
-- Schema v1: conversations table and conservative ownership reconstruction
-- Schema v2: user_sessions SHA-256 token hashing and explicit session expiration
 
 ## Blockers & Limitations
 
 1. **Heavy Inference Tests**: Full offline vision model inference requires pre-downloaded weights (Phase 3).
 2. **Docker Daemon**: Host machine lacks Docker engine; container builds execute via CI / Hugging Face Spaces.
+3. **Single-Process Rate Limiter**: `BoundedRateLimiter` is in-memory per worker; horizontal scaling with multi-worker Uvicorn/Gunicorn requires Redis-backed storage as documented in `docs/DEPLOYMENT_RUNBOOK.md`.
 
 ## Remaining Phases
 

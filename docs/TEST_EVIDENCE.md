@@ -181,3 +181,93 @@ npm --prefix frontend run build
 ```
 - **Exit Code**: 0
 - **Artifacts**: Static bundle successfully output to `../backend/app/static/`
+
+---
+
+## Phase 1C.1 Test Execution Summary
+
+### 1. Complete Backend Test Suite Inventory (Pytest)
+
+Command:
+```bash
+/tmp/nghai_venv/bin/pytest backend/tests/ -v
+```
+
+Outcome:
+- **Total Tests**: 125
+- **Passed**: 124 (99.2%)
+- **Skipped**: 1 (0.8% — `test_create_workflow` requiring optional heavy `langgraph` dependency)
+- **Failed**: 0 (0%)
+- **Duration**: 2.09s
+- **Exit Code**: 0
+
+Test Inventory by Module:
+| Test Module | Total | Passed | Skipped | Failed | Classification |
+|---|---|---|---|---|---|
+| `test_agents.py` | 18 | 18 | 0 | 0 | Passed |
+| `test_api.py` | 12 | 12 | 0 | 0 | Passed |
+| `test_api_edge_cases.py` | 1 | 1 | 0 | 0 | Passed |
+| `test_app.py` | 1 | 1 | 0 | 0 | Passed |
+| `test_auth_hardening.py` | 14 | 14 | 0 | 0 | Passed |
+| `test_coverage_gaps.py` | 9 | 9 | 0 | 0 | Passed |
+| `test_database.py` | 3 | 3 | 0 | 0 | Passed |
+| `test_logging.py` | 4 | 4 | 0 | 0 | Passed |
+| `test_phase1c1_hardening.py` | 13 | 13 | 0 | 0 | Passed |
+| `test_security_ownership.py` | 12 | 12 | 0 | 0 | Passed |
+| `test_services.py` | 11 | 11 | 0 | 0 | Passed |
+| `test_tools.py` | 12 | 12 | 0 | 0 | Passed |
+| `test_workflow.py` | 1 | 1 | 0 | 0 | Passed |
+| `test_workflow_routing.py` | 7 | 6 | 1 | 0 | Passed (1 Skipped) |
+| **Total Suite** | **125** | **124** | **1** | **0** | **Passed** |
+
+Phase 1C.1 Specific Test Details (`test_phase1c1_hardening.py`):
+| Test Name | Security & Migration Scenario Verified | Outcome |
+|---|---|---|
+| `test_proxy_untrusted_peer_ignores_xff` | SEC-01: Connecting peer outside TRUSTED_PROXIES ignores spoofed X-Forwarded-For | ✅ Pass |
+| `test_proxy_trusted_peer_extracts_client_ip` | SEC-01: Trusted peer extracts authentic client IP from X-Forwarded-For | ✅ Pass |
+| `test_proxy_cidr_network_matching` | SEC-01: Supports CIDR blocks (`10.0.0.0/8`, `172.16.0.0/12`) for reverse proxies | ✅ Pass |
+| `test_proxy_spoofed_chain_via_trusted_proxy` | SEC-01: Traverses proxy chain right-to-left to locate genuine untrusted client | ✅ Pass |
+| `test_proxy_malformed_header_safe_fallback` | SEC-01: Malformed IP strings safely skipped without crashing | ✅ Pass |
+| `test_bounded_rate_limiter_memory_cap` | SEC-02: Rate limiter capacity capped at max_entries with automatic eviction | ✅ Pass |
+| `test_register_rate_limiting_enforced` | SEC-02: Registration rate limiting (5 attempts per minute) triggers HTTP 429 | ✅ Pass |
+| `test_login_per_user_lockout_across_distributed_ips` | SEC-02: 5 failed attempts on specific username triggers per-account lockout across rotating IPs | ✅ Pass |
+| `test_login_success_clears_rate_limit` | SEC-02: Successful authentication clears IP and username failure buckets | ✅ Pass |
+| `test_mig01_atomic_staging_cutover_success` | MIG-01: Atomic staging table cutover with count, SHA-256 hash, and schema validation | ✅ Pass |
+| `test_mig01_atomic_staging_rollback_on_validation_failure` | MIG-01: Transaction rolls back on validation failure; legacy user_sessions preserved intact | ✅ Pass |
+| `test_mig02_missing_users_table_quarantines_all_conversations` | MIG-02: Missing users table fails closed into quarantine (`is_quarantined=1, user_id=0`) | ✅ Pass |
+| `test_mig02_unregistered_user_id_quarantined` | MIG-02: Unregistered user ID fails closed into quarantine; messages preserved | ✅ Pass |
+
+---
+
+### 2. Frontend Vitest Integration Tests
+
+Command:
+```bash
+npm --prefix frontend test -- --run
+```
+- **Tests**: 4 / 4 passed (100%)
+- **Exit Code**: 0
+
+---
+
+### 3. Frontend ESLint Linter
+
+Command:
+```bash
+npm --prefix frontend run lint
+```
+- **Errors**: 0
+- **Warnings**: 0
+- **Exit Code**: 0
+
+---
+
+### 4. Frontend Production Build
+
+Command:
+```bash
+npm --prefix frontend run build
+```
+- **Exit Code**: 0
+- **Artifacts**: Static bundle successfully output to `../backend/app/static/`
+

@@ -39,3 +39,13 @@ _raw_cors = os.getenv(
     "http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000",
 )
 ALLOWED_ORIGINS: List[str] = [origin.strip() for origin in _raw_cors.split(",") if origin.strip()]
+
+# ── Reverse Proxy & Rate Limiting Configuration ──────────────────────────────
+_raw_trusted_proxies = os.getenv("TRUSTED_PROXIES", "127.0.0.1,::1").strip()
+TRUSTED_PROXIES: List[str] = [p.strip() for p in _raw_trusted_proxies.split(",") if p.strip()]
+
+RATE_LIMIT_LOGIN_PER_IP: int = int(os.getenv("RATE_LIMIT_LOGIN_PER_IP", "10"))
+RATE_LIMIT_LOGIN_PER_USER: int = int(os.getenv("RATE_LIMIT_LOGIN_PER_USER", "5"))
+RATE_LIMIT_REGISTER_PER_IP: int = int(os.getenv("RATE_LIMIT_REGISTER_PER_IP", "5"))
+RATE_LIMIT_WINDOW_SECONDS: float = float(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60.0"))
+

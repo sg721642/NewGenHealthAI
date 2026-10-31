@@ -1,4 +1,5 @@
 """Tests for LangGraph routing functions"""
+import pytest
 from app.core.langgraph_workflow import (
     _route_after_llm,
     _route_after_llm_fallback,
@@ -40,5 +41,7 @@ def test_route_after_tavily():
 
 
 def test_create_workflow():
+    pytest.importorskip("langgraph")
     workflow = create_workflow()
     assert workflow is not None
+

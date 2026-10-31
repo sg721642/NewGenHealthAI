@@ -3,7 +3,12 @@ NewGenHealthAI — core/langgraph_workflow.py
 LangGraph StateGraph definition, routing functions, and workflow factory.
 """
 
-from langgraph.graph import END, StateGraph
+try:
+    from langgraph.graph import END, StateGraph
+except ImportError:
+    END = "__end__"
+    StateGraph = None
+
 
 from app.agents.executor import ExecutorAgent
 from app.agents.explanation import ExplanationAgent
