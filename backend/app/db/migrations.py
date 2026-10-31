@@ -4,15 +4,16 @@ Safe, versioned, idempotent SQLite migrations with online backup and recovery su
 Uses SQLite Online Backup API for crash-consistent live snapshots even in WAL mode.
 """
 
+import hashlib
 import os
 import sqlite3
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, Optional
 from sqlalchemy import text, inspect
 from app.core.logging_config import logger
 
-CURRENT_SCHEMA_VERSION = 1
+CURRENT_SCHEMA_VERSION = 2
 
 
 def backup_database(db_path: str, backup_dir: Optional[str] = None) -> Optional[str]:
@@ -99,15 +100,11 @@ def restore_database(backup_path: str, target_db_path: str) -> bool:
 def run_database_migration(engine_instance, db_path: Optional[str] = None) -> Dict[str, Any]:
     """
     Run version-guarded, idempotent database migration.
-    1. Online backup executed before any schema modifications.
-    2. Version-tracked via 'schema_versions' table.
-    3. Ensures 'conversations' table exists with proper indices.
-    4. Migrates legacy messages with conservative ownership reconstruction:
-       - Pure single-owner sessions (no NULL rows, exactly one valid user_id in users table): migrated.
-       - Mixed sessions (NULL + user_id): strictly quarantined (never backfilled).
-       - Conflicting sessions (multiple user_ids): strictly quarantined.
-       - Anonymous sessions (all NULL user_ids): strictly quarantined.
-       - Original messages and ownership are preserved unmodified during quarantine.
+    1. Check current schema version BEFORE performing backup to avoid runaway backup accumulation.
+    2. Online backup executed only when migration actions are needed.
+    3. Version-tracked via 'schema_versions' table.
+    4. Version 1: Ensures 'conversations' table exists and migrates legacy messages conservatively.
+    5. Version 2: Migrates 'user_sessions' to store SHA-256 token hashes and explicit expires_at.
     """
     # Extract dynamic db_path from engine if not provided
     if db_path is None:
@@ -115,33 +112,40 @@ def run_database_migration(engine_instance, db_path: Optional[str] = None) -> Di
         if engine_db and engine_db != ":memory:":
             db_path = engine_db
 
-    # Execute online backup BEFORE any schema operations
-    if db_path and os.path.exists(db_path) and os.path.getsize(db_path) > 0:
-        backup_database(db_path)
-
     stats = {
         "conversations_table_created": False,
         "migrated_conversations": 0,
         "quarantined_conversations": 0,
         "already_migrated": 0,
         "schema_version": 0,
+        "user_sessions_migrated": False,
     }
 
+    # Step 0: Pre-check schema_versions BEFORE creating any backups
     with engine_instance.connect() as conn:
         inspector = inspect(engine_instance)
         table_names = inspector.get_table_names()
 
-        # Step 0: Check schema_versions if it already exists
+        latest_version = 0
         if "schema_versions" in table_names:
-            latest_version = conn.execute(text("SELECT MAX(version) FROM schema_versions")).scalar()
-            if latest_version is not None and latest_version >= CURRENT_SCHEMA_VERSION:
-                logger.info("Database schema already at version %d. Skipping migration.", latest_version)
-                already_migrated = 0
-                if "conversations" in table_names:
-                    already_migrated = conn.execute(text("SELECT count(*) FROM conversations")).scalar() or 0
-                stats["already_migrated"] = already_migrated
-                stats["schema_version"] = latest_version
-                return stats
+            ver = conn.execute(text("SELECT MAX(version) FROM schema_versions")).scalar()
+            if ver is not None:
+                latest_version = ver
+
+        if latest_version >= CURRENT_SCHEMA_VERSION:
+            logger.info("Database schema already at version %d. Skipping migration.", latest_version)
+            if "conversations" in table_names:
+                stats["already_migrated"] = conn.execute(text("SELECT count(*) FROM conversations")).scalar() or 0
+            stats["schema_version"] = latest_version
+            return stats
+
+    # Migration is genuinely required -> Execute online backup before schema operations
+    if db_path and os.path.exists(db_path) and os.path.getsize(db_path) > 0:
+        backup_database(db_path)
+
+    with engine_instance.connect() as conn:
+        inspector = inspect(engine_instance)
+        table_names = inspector.get_table_names()
 
         # Ensure schema_versions table exists
         if "schema_versions" not in table_names:
@@ -153,150 +157,200 @@ def run_database_migration(engine_instance, db_path: Optional[str] = None) -> Di
                 )
             """))
             conn.commit()
+            table_names.append("schema_versions")
 
-        # Step 1: Ensure conversations table exists
-        if "conversations" not in table_names:
-            conn.execute(text("""
-                CREATE TABLE conversations (
-                    id VARCHAR(255) PRIMARY KEY,
-                    user_id INTEGER NOT NULL,
-                    title VARCHAR(255),
-                    created_at DATETIME NOT NULL,
-                    updated_at DATETIME NOT NULL,
-                    is_quarantined INTEGER NOT NULL DEFAULT 0
-                )
-            """))
-            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_conversations_user_id ON conversations (user_id)"))
-            conn.commit()
-            stats["conversations_table_created"] = True
-            logger.info("Created 'conversations' table with indices.")
+        latest_version = conn.execute(text("SELECT MAX(version) FROM schema_versions")).scalar() or 0
 
-        if "messages" not in table_names:
+        # ── Step 1: Version 1 Migration (Conversations & Ownership Reconstruction) ──
+        if latest_version < 1:
+            if "conversations" not in table_names:
+                conn.execute(text("""
+                    CREATE TABLE conversations (
+                        id VARCHAR(255) PRIMARY KEY,
+                        user_id INTEGER NOT NULL,
+                        title VARCHAR(255),
+                        created_at DATETIME NOT NULL,
+                        updated_at DATETIME NOT NULL,
+                        is_quarantined INTEGER NOT NULL DEFAULT 0
+                    )
+                """))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_conversations_user_id ON conversations (user_id)"))
+                conn.commit()
+                table_names.append("conversations")
+                stats["conversations_table_created"] = True
+                logger.info("Created 'conversations' table with indices.")
+
+            if "messages" in table_names:
+                message_cols = [c["name"] for c in inspector.get_columns("messages")]
+                users_exist = "users" in table_names
+
+                existing_sessions = conn.execute(text("SELECT DISTINCT session_id FROM messages")).fetchall()
+                session_ids = [row[0] for row in existing_sessions if row[0]]
+
+                for sid in session_ids:
+                    existing_conv = conn.execute(
+                        text("SELECT id FROM conversations WHERE id = :sid"),
+                        {"sid": sid}
+                    ).fetchone()
+                    if existing_conv:
+                        stats["already_migrated"] += 1
+                        continue
+
+                    ts_row = conn.execute(
+                        text("SELECT MIN(timestamp), MAX(timestamp) FROM messages WHERE session_id = :sid"),
+                        {"sid": sid}
+                    ).fetchone()
+                    created_at = ts_row[0] if (ts_row and ts_row[0]) else datetime.now(timezone.utc)
+                    updated_at = ts_row[1] if (ts_row and ts_row[1]) else datetime.now(timezone.utc)
+
+                    if "user_id" not in message_cols:
+                        conn.execute(text("""
+                            INSERT INTO conversations (id, user_id, title, created_at, updated_at, is_quarantined)
+                            VALUES (:id, 0, :title, :created_at, :updated_at, 1)
+                        """), {
+                            "id": sid,
+                            "title": f"Quarantined Legacy Session {sid[:8]}",
+                            "created_at": created_at,
+                            "updated_at": updated_at,
+                        })
+                        conn.commit()
+                        stats["quarantined_conversations"] += 1
+                        continue
+
+                    msg_rows = conn.execute(
+                        text("SELECT DISTINCT user_id FROM messages WHERE session_id = :sid"),
+                        {"sid": sid}
+                    ).fetchall()
+
+                    has_null = any(r[0] is None for r in msg_rows)
+                    distinct_non_null = [r[0] for r in msg_rows if r[0] is not None]
+
+                    user_exists = False
+                    if len(distinct_non_null) == 1:
+                        owner_id = distinct_non_null[0]
+                        if users_exist:
+                            u_row = conn.execute(
+                                text("SELECT id FROM users WHERE id = :uid"),
+                                {"uid": owner_id}
+                            ).fetchone()
+                            user_exists = bool(u_row)
+                        else:
+                            user_exists = True
+
+                    if not has_null and len(distinct_non_null) == 1 and user_exists:
+                        owner_id = distinct_non_null[0]
+                        conn.execute(text("""
+                            INSERT INTO conversations (id, user_id, title, created_at, updated_at, is_quarantined)
+                            VALUES (:id, :user_id, :title, :created_at, :updated_at, 0)
+                        """), {
+                            "id": sid,
+                            "user_id": owner_id,
+                            "title": f"Consultation {sid[:8]}",
+                            "created_at": created_at,
+                            "updated_at": updated_at,
+                        })
+                        conn.commit()
+                        stats["migrated_conversations"] += 1
+                        logger.info("Migrated clean session %s to confirmed owner %s", sid[:8], owner_id)
+                    else:
+                        conn.execute(text("""
+                            INSERT INTO conversations (id, user_id, title, created_at, updated_at, is_quarantined)
+                            VALUES (:id, 0, :title, :created_at, :updated_at, 1)
+                        """), {
+                            "id": sid,
+                            "title": f"Quarantined Legacy Session {sid[:8]}",
+                            "created_at": created_at,
+                            "updated_at": updated_at,
+                        })
+                        conn.commit()
+                        stats["quarantined_conversations"] += 1
+
             now_dt = datetime.now(timezone.utc)
             conn.execute(text("""
                 INSERT INTO schema_versions (version, applied_at, description)
-                VALUES (:ver, :applied_at, :desc)
+                VALUES (1, :applied_at, :desc)
             """), {
-                "ver": CURRENT_SCHEMA_VERSION,
                 "applied_at": now_dt,
                 "desc": "Phase 1B: conversations table, conservative ownership reconstruction, schema tracking",
             })
             conn.commit()
-            stats["schema_version"] = CURRENT_SCHEMA_VERSION
-            return stats
+            latest_version = 1
 
-        # Step 2: Inspect existing messages and reconstruct ownership conservatively
-        message_cols = [c["name"] for c in inspector.get_columns("messages")]
-        users_exist = "users" in table_names
-
-        existing_sessions = conn.execute(text("SELECT DISTINCT session_id FROM messages")).fetchall()
-        session_ids = [row[0] for row in existing_sessions if row[0]]
-
-        for sid in session_ids:
-            # Check if conversation already registered
-            existing_conv = conn.execute(
-                text("SELECT id FROM conversations WHERE id = :sid"),
-                {"sid": sid}
-            ).fetchone()
-            if existing_conv:
-                stats["already_migrated"] += 1
-                continue
-
-            # Fetch timestamps
-            ts_row = conn.execute(
-                text("SELECT MIN(timestamp), MAX(timestamp) FROM messages WHERE session_id = :sid"),
-                {"sid": sid}
-            ).fetchone()
-            created_at = ts_row[0] if (ts_row and ts_row[0]) else datetime.now(timezone.utc)
-            updated_at = ts_row[1] if (ts_row and ts_row[1]) else datetime.now(timezone.utc)
-
-            # If messages table lacks user_id column, quarantine immediately
-            if "user_id" not in message_cols:
+        # ── Step 2: Version 2 Migration (user_sessions Token Hashing & Expiration) ──
+        if latest_version < 2:
+            if "user_sessions" not in table_names:
                 conn.execute(text("""
-                    INSERT INTO conversations (id, user_id, title, created_at, updated_at, is_quarantined)
-                    VALUES (:id, 0, :title, :created_at, :updated_at, 1)
-                """), {
-                    "id": sid,
-                    "title": f"Quarantined Legacy Session {sid[:8]}",
-                    "created_at": created_at,
-                    "updated_at": updated_at,
-                })
+                    CREATE TABLE user_sessions (
+                        token_hash VARCHAR(64) PRIMARY KEY,
+                        user_id INTEGER NOT NULL,
+                        created_at DATETIME NOT NULL,
+                        expires_at DATETIME NOT NULL
+                    )
+                """))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_user_sessions_user_id ON user_sessions (user_id)"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_user_sessions_expires_at ON user_sessions (expires_at)"))
                 conn.commit()
-                stats["quarantined_conversations"] += 1
-                continue
-
-            # Analyze message ownership for this session
-            msg_rows = conn.execute(
-                text("SELECT DISTINCT user_id FROM messages WHERE session_id = :sid"),
-                {"sid": sid}
-            ).fetchall()
-
-            has_null = any(r[0] is None for r in msg_rows)
-            distinct_non_null = [r[0] for r in msg_rows if r[0] is not None]
-
-            # Verify that user exists in users table
-            user_exists = False
-            if len(distinct_non_null) == 1:
-                owner_id = distinct_non_null[0]
-                if users_exist:
-                    u_row = conn.execute(
-                        text("SELECT id FROM users WHERE id = :uid"),
-                        {"uid": owner_id}
-                    ).fetchone()
-                    user_exists = bool(u_row)
-                else:
-                    user_exists = True
-
-            # Conservative ownership rule:
-            # ONLY migrate cleanly if:
-            # 1. No NULL user_id rows exist for this session
-            # 2. Exactly ONE distinct non-null user_id exists
-            # 3. The user exists in the users table
-            if not has_null and len(distinct_non_null) == 1 and user_exists:
-                owner_id = distinct_non_null[0]
-                conn.execute(text("""
-                    INSERT INTO conversations (id, user_id, title, created_at, updated_at, is_quarantined)
-                    VALUES (:id, :user_id, :title, :created_at, :updated_at, 0)
-                """), {
-                    "id": sid,
-                    "user_id": owner_id,
-                    "title": f"Consultation {sid[:8]}",
-                    "created_at": created_at,
-                    "updated_at": updated_at,
-                })
-                conn.commit()
-                stats["migrated_conversations"] += 1
-                logger.info("Migrated clean session %s to confirmed owner %s", sid[:8], owner_id)
+                stats["user_sessions_migrated"] = True
+                logger.info("Created 'user_sessions' table with schema v2.")
             else:
-                # Ambiguous, mixed NULL + user, NULL-only, conflicting, or unknown user -> Quarantine
-                # CRITICAL: Preserve all original messages and their user_id values unmodified
-                conn.execute(text("""
-                    INSERT INTO conversations (id, user_id, title, created_at, updated_at, is_quarantined)
-                    VALUES (:id, 0, :title, :created_at, :updated_at, 1)
-                """), {
-                    "id": sid,
-                    "title": f"Quarantined Legacy Session {sid[:8]}",
-                    "created_at": created_at,
-                    "updated_at": updated_at,
-                })
-                conn.commit()
-                stats["quarantined_conversations"] += 1
-                logger.warning(
-                    "Quarantined session %s (has_null=%s, distinct_non_null=%s, user_exists=%s)",
-                    sid[:8], has_null, distinct_non_null, user_exists
-                )
+                session_cols = [c["name"] for c in inspector.get_columns("user_sessions")]
+                if "token_hash" not in session_cols:
+                    logger.info("Upgrading user_sessions to schema v2 (SHA-256 token hashing & expires_at)...")
+                    conn.execute(text("""
+                        CREATE TABLE user_sessions_v2 (
+                            token_hash VARCHAR(64) PRIMARY KEY,
+                            user_id INTEGER NOT NULL,
+                            created_at DATETIME NOT NULL,
+                            expires_at DATETIME NOT NULL
+                        )
+                    """))
+                    conn.commit()
 
-        # Record schema version in schema_versions table
-        now_dt = datetime.now(timezone.utc)
-        conn.execute(text("""
-            INSERT INTO schema_versions (version, applied_at, description)
-            VALUES (:ver, :applied_at, :desc)
-        """), {
-            "ver": CURRENT_SCHEMA_VERSION,
-            "applied_at": now_dt,
-            "desc": "Phase 1B: conversations table, conservative ownership reconstruction, schema tracking",
-        })
-        conn.commit()
-        stats["schema_version"] = CURRENT_SCHEMA_VERSION
+                    legacy_sessions = conn.execute(text("SELECT token, user_id, created_at FROM user_sessions")).fetchall()
+                    for row in legacy_sessions:
+                        raw_tok = str(row[0]).strip() if row[0] else ""
+                        if not raw_tok:
+                            continue
+                        tok_hash = hashlib.sha256(raw_tok.encode("utf-8")).hexdigest()
+                        uid = row[1]
+                        c_at = row[2]
+                        if isinstance(c_at, str):
+                            try:
+                                c_dt = datetime.fromisoformat(c_at)
+                            except Exception:
+                                c_dt = datetime.now(timezone.utc)
+                        elif isinstance(c_at, datetime):
+                            c_dt = c_at
+                        else:
+                            c_dt = datetime.now(timezone.utc)
+
+                        exp_dt = c_dt + timedelta(hours=24)
+
+                        conn.execute(text("""
+                            INSERT OR REPLACE INTO user_sessions_v2 (token_hash, user_id, created_at, expires_at)
+                            VALUES (:th, :uid, :cat, :exp)
+                        """), {"th": tok_hash, "uid": uid, "cat": c_dt, "exp": exp_dt})
+                    conn.commit()
+
+                    conn.execute(text("DROP TABLE user_sessions"))
+                    conn.execute(text("ALTER TABLE user_sessions_v2 RENAME TO user_sessions"))
+                    conn.execute(text("CREATE INDEX IF NOT EXISTS idx_user_sessions_user_id ON user_sessions (user_id)"))
+                    conn.execute(text("CREATE INDEX IF NOT EXISTS idx_user_sessions_expires_at ON user_sessions (expires_at)"))
+                    conn.commit()
+                    stats["user_sessions_migrated"] = True
+                    logger.info("Successfully migrated %d legacy sessions to schema v2.", len(legacy_sessions))
+
+            now_dt = datetime.now(timezone.utc)
+            conn.execute(text("""
+                INSERT INTO schema_versions (version, applied_at, description)
+                VALUES (2, :applied_at, :desc)
+            """), {
+                "applied_at": now_dt,
+                "desc": "Phase 1C: user_sessions SHA-256 token hashing and explicit session expiration",
+            })
+            conn.commit()
+            latest_version = 2
+
+        stats["schema_version"] = latest_version
 
     return stats

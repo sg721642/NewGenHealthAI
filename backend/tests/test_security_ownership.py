@@ -547,7 +547,7 @@ def test_database_migration_unambiguous_and_quarantine(tmp_path):
     assert stats["conversations_table_created"] is True
     assert stats["migrated_conversations"] == 1
     assert stats["quarantined_conversations"] == 4
-    assert stats["schema_version"] == 1
+    assert stats["schema_version"] == 2
 
     with engine.connect() as conn:
         # Verify sess_clean is owned by user 10 and not quarantined
@@ -593,16 +593,16 @@ def test_database_migration_unambiguous_and_quarantine(tmp_path):
         assert unknown_row is not None
         assert unknown_row[0] == 1
 
-        # Verify schema_versions table exists and records version 1
+        # Verify schema_versions table exists and records version 2
         ver = conn.execute(text("SELECT MAX(version) FROM schema_versions")).scalar()
-        assert ver == 1
+        assert ver == 2
 
     # Idempotency test: running migration again does nothing
     stats_repeat = run_database_migration(engine, db_path=db_file)
     assert stats_repeat["migrated_conversations"] == 0
     assert stats_repeat["quarantined_conversations"] == 0
     assert stats_repeat["already_migrated"] == 5
-    assert stats_repeat["schema_version"] == 1
+    assert stats_repeat["schema_version"] == 2
 
     # Online Backup & Rollback test
     backup_file = backup_database(db_file)

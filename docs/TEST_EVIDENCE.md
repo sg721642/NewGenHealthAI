@@ -109,4 +109,75 @@ Outcome:
 - **Output Artifacts**:
   - `../backend/app/static/index.html` (0.68 kB)
   - `../backend/app/static/assets/index-CB66vf3N.css` (18.46 kB)
-  - `../backend/app/static/assets/index-DOpNnRmW.js` (393.69 kB)
+  - `../backend/app/static/assets/index-DZajoq3V.js` (394.19 kB)
+
+---
+
+## Phase 1C Test Execution Summary
+
+### 1. Complete Backend Test Suite (Pytest)
+
+Command:
+```bash
+PYTHONPATH=backend /tmp/nghai_venv/bin/python -m pytest backend/tests/test_database.py backend/tests/test_security_ownership.py backend/tests/test_api.py backend/tests/test_api_edge_cases.py backend/tests/test_logging.py backend/tests/test_app.py backend/tests/test_auth_hardening.py -v
+```
+
+Outcome:
+- **Total Tests**: 54
+- **Passed**: 54 (100%)
+- **Failed**: 0
+- **Skipped**: 0
+- **Duration**: 1.41s
+- **Exit Code**: 0
+
+Phase 1C Specific Test Details (`test_auth_hardening.py`):
+| Test Name | Security Scenario Verified | Outcome |
+|---|---|---|
+| `test_argon2id_unique_salts_for_identical_passwords` | Argon2id generates cryptographically random unique salts per hash | ✅ Pass |
+| `test_argon2id_verification_and_rejection` | Correct verification of matching password; rejection of mismatched password | ✅ Pass |
+| `test_legacy_password_verification_and_automatic_rehash` | Legacy PBKDF2 hash verifies with migration salt and automatically upgrades to Argon2id in DB | ✅ Pass |
+| `test_legacy_password_fails_closed_when_salt_is_missing` | Fails closed safely if legacy salt is unset/None | ✅ Pass |
+| `test_legacy_password_rejects_wrong_password` | Rejects wrong password against legacy hash | ✅ Pass |
+| `test_optimistic_concurrency_rehash_prevents_race_conditions` | Atomic optimistic concurrency prevents stale hash overwrites during concurrent logins | ✅ Pass |
+| `test_session_token_stored_as_sha256_hash_never_raw_token` | Raw 256-bit entropy token returned to client; only SHA-256 hash stored in DB | ✅ Pass |
+| `test_session_expiration_rejection_and_cleanup` | Expired tokens fail closed (401); cleanup routine removes expired sessions | ✅ Pass |
+| `test_logout_revokes_token_by_hash` | Logout deletes session token row by hash immediately; subsequent access fails closed | ✅ Pass |
+| `test_registration_input_boundary_validation` | Strict validation of username length/charset (3-50) and password length (8-128) | ✅ Pass |
+| `test_login_rate_limiting_after_excessive_failed_attempts` | Sliding window rate limits failed attempts per IP; 11th failed attempt returns HTTP 429 | ✅ Pass |
+| `test_production_fails_if_session_secret_key_missing_or_short` | Rejects startup in production when SESSION_SECRET_KEY is missing or < 32 characters | ✅ Pass |
+| `test_cors_does_not_permit_wildcard_origins_with_credentials` | Verifies wildcard '*' origin is disallowed with allow_credentials | ✅ Pass |
+| `test_voice_stt_and_tts_error_sanitization` | Internal exceptions are caught; generic client error messages returned without leaking traces | ✅ Pass |
+
+---
+
+### 2. Frontend Vitest Integration Tests
+
+Command:
+```bash
+npm --prefix frontend test -- --run
+```
+- **Tests**: 4 / 4 passed (100%)
+- **Exit Code**: 0
+
+---
+
+### 3. Frontend ESLint Linter
+
+Command:
+```bash
+npm --prefix frontend run lint
+```
+- **Errors**: 0
+- **Warnings**: 0
+- **Exit Code**: 0
+
+---
+
+### 4. Frontend Production Build
+
+Command:
+```bash
+npm --prefix frontend run build
+```
+- **Exit Code**: 0
+- **Artifacts**: Static bundle successfully output to `../backend/app/static/`

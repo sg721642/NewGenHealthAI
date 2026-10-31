@@ -4,13 +4,16 @@ DatabaseService: CRUD operations for conversations, messages, and user accounts.
 Strictly enforces server-side conversation ownership and data isolation.
 """
 
+import hashlib
+import secrets
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional
 
 from sqlalchemy import delete, desc, func, select, update
 from sqlalchemy.orm import Session
 
+from app.core.config import SESSION_EXPIRE_HOURS
 from app.core.logging_config import logger
 from app.db.session import SessionLocal, engine
 from app.models.message import Base, Conversation, Message, User, UserSession
@@ -256,18 +259,23 @@ class DatabaseService:
     def create_user(self, username: str, password_raw: str) -> Optional[User]:
         """Register a new user, returning the user if successful, or None if username exists."""
         with self.get_session() as session:
-            existing = session.execute(
-                select(User).where(User.username == username)
-            ).scalar_one_or_none()
-            if existing:
-                return None
+            try:
+                existing = session.execute(
+                    select(User).where(User.username == username)
+                ).scalar_one_or_none()
+                if existing:
+                    return None
 
-            hashed = User.hash_password(password_raw)
-            user = User(username=username, hashed_password=hashed)
-            session.add(user)
-            session.commit()
-            session.refresh(user)
-            return user
+                hashed = User.hash_password(password_raw)
+                user = User(username=username, hashed_password=hashed)
+                session.add(user)
+                session.commit()
+                session.refresh(user)
+                return user
+            except Exception as e:
+                session.rollback()
+                logger.warning("Error creating user %s: %s", username, e)
+                return None
 
     def get_user_by_username(self, username: str) -> Optional[User]:
         """Fetch a user record by username."""
@@ -276,48 +284,107 @@ class DatabaseService:
                 select(User).where(User.username == username)
             ).scalar_one_or_none()
 
-    def create_user_session(self, user_id: int) -> str:
-        """Create a new session token for the user."""
-        token = str(uuid.uuid4())
+    def update_user_password_hash(
+        self, user_id: int, new_hash: str, expected_old_hash: str
+    ) -> bool:
+        """
+        Safely update user's password hash using optimistic concurrency control.
+        Ensures race-safe credential rehash during migration.
+        """
         with self.get_session() as session:
-            user_session = UserSession(token=token, user_id=user_id)
+            res = session.execute(
+                update(User)
+                .where(User.id == user_id, User.hashed_password == expected_old_hash)
+                .values(hashed_password=new_hash)
+            )
+            session.commit()
+            return res.rowcount > 0
+
+    def create_user_session(self, user_id: int, expire_hours: Optional[int] = None) -> str:
+        """
+        Create a new cryptographically secure session token.
+        Stores SHA-256 hash in DB; returns raw token to client.
+        """
+        raw_token = secrets.token_urlsafe(32)
+        token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+        now = datetime.now(timezone.utc)
+        expires_at = now + timedelta(hours=expire_hours or SESSION_EXPIRE_HOURS)
+
+        with self.get_session() as session:
+            user_session = UserSession(
+                token_hash=token_hash,
+                user_id=user_id,
+                created_at=now,
+                expires_at=expires_at,
+            )
             session.add(user_session)
             session.commit()
-            return token
+            return raw_token
 
     def get_user_id_by_token(self, token: str) -> Optional[int]:
-        """Validate token and return associated user ID."""
+        """Validate raw token hash and expiration, returning user_id if active."""
         if not token or not token.strip():
             return None
+        token_hash = hashlib.sha256(token.strip().encode("utf-8")).hexdigest()
         with self.get_session() as session:
             user_session = session.execute(
-                select(UserSession).where(UserSession.token == token.strip())
-            ).scalar_one_or_none()
-            if user_session:
-                return user_session.user_id
-            return None
-
-    def get_user_by_token(self, token: str) -> Optional[User]:
-        """Validate token and return associated User record."""
-        if not token or not token.strip():
-            return None
-        with self.get_session() as session:
-            user_session = session.execute(
-                select(UserSession).where(UserSession.token == token.strip())
+                select(UserSession).where(UserSession.token_hash == token_hash)
             ).scalar_one_or_none()
             if not user_session:
                 return None
+
+            now = datetime.now(timezone.utc)
+            exp = user_session.expires_at
+            if exp.tzinfo is None:
+                exp = exp.replace(tzinfo=timezone.utc)
+            if exp < now:
+                return None
+
+            return user_session.user_id
+
+    def get_user_by_token(self, token: str) -> Optional[User]:
+        """Validate raw token hash and expiration, returning User if active."""
+        if not token or not token.strip():
+            return None
+        token_hash = hashlib.sha256(token.strip().encode("utf-8")).hexdigest()
+        with self.get_session() as session:
+            user_session = session.execute(
+                select(UserSession).where(UserSession.token_hash == token_hash)
+            ).scalar_one_or_none()
+            if not user_session:
+                return None
+
+            now = datetime.now(timezone.utc)
+            exp = user_session.expires_at
+            if exp.tzinfo is None:
+                exp = exp.replace(tzinfo=timezone.utc)
+            if exp < now:
+                logger.info("Session token expired for user %s", user_session.user_id)
+                return None
+
             return session.get(User, user_session.user_id)
 
-    def delete_user_session(self, token: str) -> None:
-        """Delete/invalidate the session token."""
-        if not token:
-            return
+    def delete_user_session(self, token: str) -> bool:
+        """Revoke session token by its SHA-256 hash."""
+        if not token or not token.strip():
+            return False
+        token_hash = hashlib.sha256(token.strip().encode("utf-8")).hexdigest()
         with self.get_session() as session:
-            session.execute(
-                delete(UserSession).where(UserSession.token == token.strip())
+            res = session.execute(
+                delete(UserSession).where(UserSession.token_hash == token_hash)
             )
             session.commit()
+            return res.rowcount > 0
+
+    def cleanup_expired_sessions(self) -> int:
+        """Purge all expired session rows."""
+        now = datetime.now(timezone.utc)
+        with self.get_session() as session:
+            res = session.execute(
+                delete(UserSession).where(UserSession.expires_at < now)
+            )
+            session.commit()
+            return res.rowcount
 
 
 # Module-level singleton

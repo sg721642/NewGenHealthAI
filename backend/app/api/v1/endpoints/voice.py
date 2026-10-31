@@ -111,7 +111,7 @@ async def speech_to_text(
                         response_format="json",
                     )
                     raw_text = transcription.text if transcription else ""
-                    logger.info("STT: %s returned: '%s'", model_name, raw_text[:200])
+                    logger.info("STT: %s completed successfully (characters=%d)", model_name, len(raw_text))
                     break
                 except Exception as e:
                     last_error = str(e)
@@ -119,15 +119,14 @@ async def speech_to_text(
                     continue
 
             if transcription is None:
-                logger.error("STT: All models failed: %s", last_error)
-                return {"text": "", "language": None, "error": f"Whisper failed: {last_error}"}
+                logger.error("STT: All models failed (underlying: %s)", last_error)
+                return {"text": "", "language": None, "error": "Transcription service temporarily unavailable"}
 
             result_text = (transcription.text or "").strip()
             lang = getattr(transcription, "language", None)
 
-            # No filtering — return whatever Whisper gives us.
-            # The old hallucination filter was blocking legitimate speech.
-            logger.info("STT: Result: '%s' (lang=%s)", result_text[:200], lang)
+            # Sanitized logging: log character count and language code only; never log sensitive clinical transcripts
+            logger.info("STT: Transcription successful (characters=%d, lang=%s)", len(result_text), lang)
             return {"text": result_text, "language": lang}
 
         finally:
@@ -138,7 +137,7 @@ async def speech_to_text(
         raise
     except Exception as e:
         logger.error("STT error: %s", str(e))
-        return {"text": "", "language": None, "error": str(e)}
+        return {"text": "", "language": None, "error": "Transcription processing error"}
 
 
 class TTSRequest(BaseModel):
@@ -194,4 +193,4 @@ async def text_to_speech(
         raise
     except Exception as e:
         logger.error("TTS error: %s", str(e))
-        raise HTTPException(status_code=500, detail=f"TTS Error: {str(e)}")
+        raise HTTPException(status_code=500, detail="Text-to-speech synthesis failed")

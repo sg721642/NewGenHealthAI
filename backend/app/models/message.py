@@ -1,16 +1,32 @@
 """
 NewGenHealthAI — models/message.py
-SQLAlchemy ORM model for chat messages.
+SQLAlchemy ORM models for chat messages, conversations, and user authentication.
+Uses Argon2id for secure password hashing with safe legacy PBKDF2 upgrade support.
 """
 
 from datetime import datetime, timezone
 import hashlib
-from typing import Dict
+import hmac
+from typing import Dict, NamedTuple, Optional, Tuple
 
+from argon2 import PasswordHasher
+from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
 from sqlalchemy import Column, DateTime, Integer, String, Text
 from sqlalchemy.orm import declarative_base
 
 Base = declarative_base()
+
+_hasher = PasswordHasher()
+
+
+class PasswordVerificationResult(NamedTuple):
+    """Result of password verification, indicating rehash requirements."""
+    is_valid: bool
+    needs_rehash: bool
+    new_hash: Optional[str]
+
+    def __bool__(self) -> bool:
+        return self.is_valid
 
 
 class User(Base):
@@ -32,24 +48,53 @@ class User(Base):
 
     @staticmethod
     def hash_password(password: str) -> str:
-        """Hash password using robust, dependency-free pbkdf2_hmac."""
-        salt = b"susham_health_ai_salt_12983719"
-        key = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 100000)
-        return key.hex()
+        """Hash password using modern, memory-hard Argon2id."""
+        return _hasher.hash(password)
 
-    def verify_password(self, password: str) -> bool:
-        """Verify the password against the stored hash."""
-        return self.hashed_password == self.hash_password(password)
+    def verify_password(
+        self, password: str, legacy_salt: Optional[bytes] = None
+    ) -> PasswordVerificationResult:
+        """
+        Verify password against stored hash.
+        Supports both modern Argon2id ($argon2id$) and legacy PBKDF2 hashes.
+        If a legacy hash or outdated parameters are detected, indicates needs_rehash=True with new Argon2id hash.
+        Fails closed if legacy salt is missing for legacy hashes.
+        """
+        if not self.hashed_password or not password:
+            return PasswordVerificationResult(False, False, None)
+
+        # 1. Modern Argon2id verification
+        if self.hashed_password.startswith("$argon2"):
+            try:
+                _hasher.verify(self.hashed_password, password)
+                needs_rehash = _hasher.check_needs_rehash(self.hashed_password)
+                new_hash = _hasher.hash(password) if needs_rehash else None
+                return PasswordVerificationResult(True, needs_rehash, new_hash)
+            except (VerifyMismatchError, VerificationError, InvalidHashError):
+                return PasswordVerificationResult(False, False, None)
+
+        # 2. Legacy PBKDF2 verification (for safe migration)
+        # Note: Fails closed if legacy_salt is not configured
+        if not legacy_salt:
+            return PasswordVerificationResult(False, False, None)
+
+        legacy_computed = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), legacy_salt, 100000).hex()
+        if hmac.compare_digest(self.hashed_password, legacy_computed):
+            new_hash = _hasher.hash(password)
+            return PasswordVerificationResult(True, True, new_hash)
+
+        return PasswordVerificationResult(False, False, None)
 
 
 class UserSession(Base):
-    """User authentication session token."""
+    """User authentication session token stored as SHA-256 hash with explicit expiration."""
 
     __tablename__ = "user_sessions"
 
-    token = Column(String(255), primary_key=True)
+    token_hash = Column(String(64), primary_key=True)
     user_id = Column(Integer, nullable=False, index=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    expires_at = Column(DateTime, nullable=False, index=True)
 
 
 class Conversation(Base):

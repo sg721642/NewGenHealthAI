@@ -2250,6 +2250,7 @@ export default function App() {
     setMessages([]);
     setChatHistory([]);
     setSessions(null);
+    setCurrentSessionId(null);
     setShowWelcome(true);
   }, [authToken]);
 
@@ -2307,6 +2308,41 @@ export default function App() {
     setToast({ show: true, message, type });
     toastTimerRef.current = setTimeout(() => setToast(t => ({ ...t, show: false })), 3000);
   }, []);
+
+  // Verify active authentication token with backend on initial mount
+  useEffect(() => {
+    if (!authToken) return;
+    let isMounted = true;
+    fetch(`${API_BASE}/auth/me`, {
+      headers: { 'Authorization': `Bearer ${authToken}` },
+    })
+      .then((res) => {
+        if (!res.ok) {
+          throw new Error('Session invalid');
+        }
+        return res.json();
+      })
+      .then((data) => {
+        if (isMounted && data && data.username) {
+          setUser((prev) => prev || { username: data.username, user_id: data.user_id });
+        }
+      })
+      .catch(() => {
+        if (isMounted) {
+          localStorage.removeItem('auth_token');
+          localStorage.removeItem('auth_user');
+          setUser(null);
+          setAuthToken(null);
+          setMessages([]);
+          setChatHistory([]);
+          setSessions(null);
+          setCurrentSessionId(null);
+          setShowWelcome(true);
+          showToast('Session expired. Please log in again.', 'info');
+        }
+      });
+    return () => { isMounted = false; };
+  }, [authToken, showToast]);
 
   // Scroll
   const scrollToBottom = useCallback(() => {

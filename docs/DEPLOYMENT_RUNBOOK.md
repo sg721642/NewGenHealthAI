@@ -19,23 +19,27 @@ GitHub (sg721642/NewGenHealthAI)
 |---|---|---|
 | `GROQ_API_KEY` | Yes | LLM (Groq) and STT (Whisper) |
 | `TAVILY_API_KEY` | Optional | Tavily web search tool |
-| `SESSION_SECRET` | Yes | Starlette session cookie signing — must be stable across restarts |
+| `SESSION_SECRET_KEY` / `SESSION_SECRET` | Yes | Starlette session cookie signing (must be at least 32 characters in production) |
+| `LEGACY_PBKDF2_SALT` | Optional (Migration) | Migration-only salt for legacy PBKDF2 password upgrades to Argon2id |
+| `SESSION_EXPIRE_HOURS` | Optional | Session token validity duration in hours (default: `24`) |
+| `ALLOWED_ORIGINS` | Optional | Comma-separated list of allowed CORS origins (default: localhost & 127.0.0.1 ports 5173/8000) |
 | `CHAT_DB_PATH` | Optional | Override SQLite path (default: `backend/storage/chat_db/susham_health.db`) |
 
 **Never commit secret values. Configure through Hugging Face Spaces → Settings → Repository secrets.**
 
 ## Database Migration & Safety Runbook
 
-Phase 1B provides `backend/app/db/migrations.py`:
-1. **SQLite Online Backup API**: On application startup, if an existing SQLite database exists, it is backed up using SQLite's Online Backup API (`src.backup(dst)`). This guarantees point-in-time consistency even with active WAL mode concurrency, avoiding torn pages.
-2. **Integrity Validation**: All backups and restores are validated with `PRAGMA integrity_check` before proceeding.
-3. **Schema Version Tracking**: Table `schema_versions (version, applied_at, description)` records migration milestones. Subsequent starts skip applied migrations idempotently.
-4. **Conservative Legacy Ownership Reconstruction**:
-   - Only sessions where 100% of messages belong to a single valid user in `users` are migrated to `conversations`.
-   - Any sessions with mixed NULL + identified users, conflicting users, NULL-only messages, or unknown users are strictly quarantined (`is_quarantined=1, user_id=0`).
-   - Original message rows and their user IDs are never modified or backfilled during quarantine.
-   - Quarantined sessions are inaccessible via normal application endpoints.
-5. **Recovery Procedure**:
+Phase 1C runs `backend/app/db/migrations.py` (Current Schema Version: 2):
+1. **Pre-check & Runaway Backup Prevention**: The migration runner checks `schema_versions` first. If the schema is already at or above `CURRENT_SCHEMA_VERSION` (2), migration and backup creation are skipped entirely.
+2. **SQLite Online Backup API**: If a schema migration is required and a database exists, a point-in-time snapshot is created using SQLite's Online Backup API (`src.backup(dst)`). This guarantees consistency even with active WAL mode concurrency.
+3. **Integrity Validation**: All backups and restores are validated with `PRAGMA integrity_check` before proceeding.
+4. **Schema Version 1 Tracking**:
+   - `conversations` table ensures explicit conversation ownership.
+   - Conservative ownership reconstruction: only clean single-owner sessions are mapped to owners; ambiguous/conflicting/null sessions are strictly quarantined (`is_quarantined=1, user_id=0`) without altering original message records.
+5. **Schema Version 2 Tracking**:
+   - `user_sessions` upgraded to store SHA-256 token hashes (`token_hash VARCHAR(64) PRIMARY KEY`) and explicit expiration (`expires_at`).
+   - Legacy raw session tokens are hashed to SHA-256 and given a 24-hour expiration window.
+6. **Recovery Procedure**:
    ```python
    from app.db.migrations import restore_database
    restore_database("backend/storage/chat_db/susham_health.db.backup_<timestamp>_<uuid>", "backend/storage/chat_db/susham_health.db")
