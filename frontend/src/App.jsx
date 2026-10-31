@@ -1632,6 +1632,7 @@ function ChatArea({ messages, isTyping, showWelcome, onQuickQuestion, onFollowUp
 function MessageBubble({ msg, onFollowUpClick }) {
   const [isSpeaking, setIsSpeaking] = useState(false);
   const audioRef = useRef(null);
+  const blobUrlRef = useRef(null);
 
   const copyText = useCallback(() => {
     navigator.clipboard.writeText(msg.content).catch(() => {});
@@ -1644,25 +1645,55 @@ function MessageBubble({ msg, onFollowUpClick }) {
       audioRef.current.pause();
       audioRef.current.currentTime = 0;
       setIsSpeaking(false);
+      if (blobUrlRef.current) {
+        URL.revokeObjectURL(blobUrlRef.current);
+        blobUrlRef.current = null;
+      }
       return;
     }
     try {
       setIsSpeaking(true);
-      // Use fetch+blob for better browser compatibility than new Audio(url)
-      const ttsUrl = `/api/v1/voice/tts?text=${encodeURIComponent(msg.content.substring(0, 2000))}`;
+      if (blobUrlRef.current) {
+        URL.revokeObjectURL(blobUrlRef.current);
+        blobUrlRef.current = null;
+      }
       const token = localStorage.getItem('auth_token');
-      const res = await fetch(ttsUrl, { headers: token ? { 'Authorization': `Bearer ${token}` } : {} });
+      const res = await fetch('/api/v1/voice/tts', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ text: msg.content.substring(0, 2000) }),
+      });
       if (!res.ok) throw new Error(`TTS failed: ${res.status}`);
       const audioBlob = await res.blob();
       const blobUrl = URL.createObjectURL(audioBlob);
+      blobUrlRef.current = blobUrl;
       const audio = new Audio(blobUrl);
       audioRef.current = audio;
-      audio.onended = () => { setIsSpeaking(false); URL.revokeObjectURL(blobUrl); };
-      audio.onerror = () => { setIsSpeaking(false); URL.revokeObjectURL(blobUrl); };
+      audio.onended = () => {
+        setIsSpeaking(false);
+        if (blobUrlRef.current) {
+          URL.revokeObjectURL(blobUrlRef.current);
+          blobUrlRef.current = null;
+        }
+      };
+      audio.onerror = () => {
+        setIsSpeaking(false);
+        if (blobUrlRef.current) {
+          URL.revokeObjectURL(blobUrlRef.current);
+          blobUrlRef.current = null;
+        }
+      };
       await audio.play();
     } catch (err) {
       console.error('TTS playback failed:', err);
       setIsSpeaking(false);
+      if (blobUrlRef.current) {
+        URL.revokeObjectURL(blobUrlRef.current);
+        blobUrlRef.current = null;
+      }
     }
   }, [msg.content, isSpeaking]);
 
@@ -1672,6 +1703,10 @@ function MessageBubble({ msg, onFollowUpClick }) {
       if (audioRef.current) {
         audioRef.current.pause();
         audioRef.current = null;
+      }
+      if (blobUrlRef.current) {
+        URL.revokeObjectURL(blobUrlRef.current);
+        blobUrlRef.current = null;
       }
     };
   }, []);
@@ -2287,7 +2322,7 @@ export default function App() {
       const data = await res.json();
       if (data.success && data.sessions) setSessions(data.sessions);
     } catch { setSessions([]); }
-  }, []);
+  }, [authHeaders]);
 
   // Mount: load history
   useEffect(() => {
@@ -2306,7 +2341,7 @@ export default function App() {
         }
       } catch { /* silent */ }
     })();
-  }, [loadSessions, user]);
+  }, [loadSessions, user, authHeaders]);
 
   // Load session
   const loadSession = useCallback(async (sessionId) => {
@@ -2323,7 +2358,7 @@ export default function App() {
         showToast('Session loaded', 'success');
       }
     } catch { showToast('Failed to load session', 'error'); }
-  }, [showToast]);
+  }, [showToast, authHeaders]);
 
   // Delete session
   const deleteSession = useCallback(async (sessionId) => {
@@ -2337,7 +2372,7 @@ export default function App() {
       }
     } catch { showToast('Failed to delete', 'error'); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentSessionId, loadSessions, showToast]);
+  }, [currentSessionId, loadSessions, showToast, authHeaders]);
 
   // New chat
   const createNewChat = useCallback(async () => {
@@ -2362,7 +2397,7 @@ export default function App() {
         showToast('Conversation cleared', 'success');
       }
     } catch { showToast('Failed to clear', 'error'); }
-  }, [showToast]);
+  }, [showToast, authHeaders]);
 
   // Download
   const downloadChat = useCallback(() => {
@@ -2486,6 +2521,17 @@ export default function App() {
         }),
         body: JSON.stringify({ message }),
       });
+      if (res.status === 404) {
+        showToast('Conversation not found or expired. Starting a fresh consultation.', 'info');
+        setCurrentSessionId(null);
+        setMessages(prev => [...prev, {
+          type: 'assistant',
+          content: 'This conversation was not found or has expired. A fresh session has been started.',
+          timestamp: new Date().toLocaleTimeString(),
+        }]);
+        await loadSessions();
+        return;
+      }
       const data = await res.json();
       if (data.success) {
         const botMsg = {
@@ -2511,7 +2557,7 @@ export default function App() {
       setMessages(prev => [...prev, { type: 'assistant', content: 'Connection error. Please check your internet and try again.', timestamp: new Date().toLocaleTimeString() }]);
       showToast('Connection error', 'error');
     } finally { setIsTyping(false); }
-  }, [inputValue, isTyping, loadSessions, showToast]);
+  }, [inputValue, isTyping, loadSessions, showToast, authHeaders, currentSessionId]);
 
   const handleQuickQuestion = useCallback((q) => { setTimeout(() => sendMessage(q), 200); }, [sendMessage]);
 

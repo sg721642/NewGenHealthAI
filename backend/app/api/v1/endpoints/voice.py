@@ -7,13 +7,14 @@ import os
 import re
 import tempfile
 import logging
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from pydantic import BaseModel, Field
 from groq import Groq
 import edge_tts
 from starlette.responses import StreamingResponse
 import langid
 
-from app.core.dependencies import get_current_user, get_current_user_media
+from app.core.dependencies import get_current_user
 from app.models.message import User
 
 logger = logging.getLogger("newgenhealthai")
@@ -140,14 +141,18 @@ async def speech_to_text(
         return {"text": "", "language": None, "error": str(e)}
 
 
-@router.get("/voice/tts")
+class TTSRequest(BaseModel):
+    text: str = Field(..., min_length=2, max_length=5000, description="Text to synthesize into speech")
+
+
+@router.post("/voice/tts")
 async def text_to_speech(
-    text: str = Query(...),
-    current_user: User = Depends(get_current_user_media),
+    body: TTSRequest,
+    current_user: User = Depends(get_current_user),
 ):
     """Convert text to speech using Edge-TTS with auto language detection."""
     try:
-        clean_text = _strip_markdown_for_tts(text)
+        clean_text = _strip_markdown_for_tts(body.text)
         if not clean_text or len(clean_text) < 2:
             raise HTTPException(status_code=400, detail="Text too short for TTS")
 

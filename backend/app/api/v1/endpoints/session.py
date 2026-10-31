@@ -99,6 +99,6 @@ async def delete_session_endpoint(
         )
 
     if req.session.get("session_id") == session_id:
-        req.session["session_id"] = str(uuid.uuid4())
+        req.session.pop("session_id", None)
 
     return {"message": "Session deleted", "success": True}

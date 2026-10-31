@@ -122,11 +122,14 @@ def test_delete_session(test_client, auth_headers):
 
 def test_clear_conversation(test_client, auth_headers):
     headers, user = auth_headers
+    conv = db_service.create_conversation(user_id=user.id)
     with patch.object(chat_service.clinical_engine, 'clear_conversation') as mock_clear:
         mock_clear.return_value = True
         response = test_client.post(
             "/api/v1/clear",
-            headers={**headers, "X-Session-ID": "test-id"}
+            headers={**headers, "X-Session-ID": conv.id}
         )
         assert response.status_code == 200
         assert "cleared" in response.json()["message"].lower()
+
+

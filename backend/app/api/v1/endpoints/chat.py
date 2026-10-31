@@ -37,6 +37,7 @@ async def chat_endpoint(
     """
     Process a user message through the clinical intelligence pipeline.
     Strictly user-authenticated; enforces ownership of session.
+    Rejects unknown or unowned client-supplied X-Session-ID with 404.
     """
     if not clinical_engine.workflow_app:
         raise HTTPException(
@@ -44,7 +45,26 @@ async def chat_endpoint(
             detail="System not initialized",
         )
 
-    session_id = _get_session_id(req)
+    client_session_id = req.headers.get("X-Session-ID")
+    if client_session_id:
+        conv = db_service.get_conversation(client_session_id, current_user.id)
+        if not conv:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Conversation not found",
+            )
+        session_id = conv.id
+    else:
+        # Check if active session in cookie is valid and owned; otherwise create new
+        cookie_session_id = req.session.get("session_id")
+        conv = None
+        if cookie_session_id:
+            conv = db_service.get_conversation(cookie_session_id, current_user.id)
+        if not conv:
+            conv = db_service.create_conversation(user_id=current_user.id)
+        session_id = conv.id
+
+    req.session["session_id"] = session_id
 
     try:
         return await clinical_engine.process_message(
@@ -66,7 +86,18 @@ async def clear_endpoint(
     Clear in-memory clinical state and persisted messages for the active session.
     Verifies that the session is owned by current_user.
     """
-    session_id = _get_session_id(req)
+    session_id = req.headers.get("X-Session-ID") or req.session.get("session_id")
+    if not session_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found",
+        )
+    conv = db_service.get_conversation(session_id, current_user.id)
+    if not conv:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found",
+        )
     cleared = clinical_engine.clear_conversation(session_id, user_id=current_user.id)
     if not cleared:
         raise HTTPException(

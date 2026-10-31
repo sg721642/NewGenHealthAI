@@ -28,8 +28,11 @@ class DatabaseService:
     def init_db(self) -> None:
         """Create all tables and run migrations if needed."""
         logger.info("Initializing database tables and running migrations...")
+        db_path = None
+        if hasattr(self.engine, "url") and self.engine.url.database:
+            db_path = self.engine.url.database
+        run_database_migration(self.engine, db_path=db_path)
         Base.metadata.create_all(bind=self.engine)
-        run_database_migration(self.engine)
 
     def get_session(self) -> Session:
         return self.SessionLocal()
@@ -76,29 +79,12 @@ class DatabaseService:
 
     def get_or_create_conversation(self, session_id: str, user_id: int) -> Optional[Conversation]:
         """
-        Verify existing conversation ownership, or create a new conversation if ID does not exist.
-        If the conversation exists but is owned by another user, returns None (fail-closed).
+        Verify existing conversation ownership and non-quarantine status.
+        Returns the Conversation if it exists and belongs to user_id.
+        Returns None if not found, owned by another user, or quarantined.
+        Does NOT automatically create conversations for arbitrary client-supplied IDs.
         """
-        if not session_id or not user_id:
-            return None
-
-        with self.get_session() as session:
-            existing = session.execute(
-                select(Conversation).where(Conversation.id == session_id)
-            ).scalar_one_or_none()
-
-            if existing:
-                if existing.user_id == user_id and existing.is_quarantined == 0:
-                    return existing
-                # Owned by someone else or quarantined -> Fail closed
-                logger.warning(
-                    "Conversation %s requested by user %s but belongs to user %s",
-                    session_id[:8], user_id, existing.user_id
-                )
-                return None
-
-        # Does not exist yet -> create for this user
-        return self.create_conversation(user_id=user_id, session_id=session_id)
+        return self.get_conversation(session_id, user_id)
 
     def save_message(
         self,
@@ -109,37 +95,30 @@ class DatabaseService:
         user_id: int = None,
     ) -> None:
         """
-        Persist a message, verifying that the target conversation belongs to user_id.
+        Persist a message, strictly verifying that target conversation exists and belongs to user_id.
+        Never creates conversations from arbitrary client-supplied IDs.
         Updates conversation updated_at timestamp.
         """
         if not user_id:
             raise ValueError("user_id is strictly required to persist chat messages")
+        if not session_id:
+            raise ValueError("session_id is strictly required to persist chat messages")
 
         with self.get_session() as session:
             conv = session.execute(
                 select(Conversation).where(Conversation.id == session_id)
             ).scalar_one_or_none()
 
-            if conv:
-                if conv.user_id != user_id or conv.is_quarantined != 0:
-                    raise PermissionError(
-                        f"Cannot append message: session {session_id} is not owned by user {user_id}"
-                    )
-                conv.updated_at = datetime.now(timezone.utc)
-            else:
-                # Register new conversation for this user
-                now = datetime.now(timezone.utc)
-                session.add(
-                    Conversation(
-                        id=session_id,
-                        user_id=user_id,
-                        title=content[:30] + "..." if len(content) > 30 else content,
-                        created_at=now,
-                        updated_at=now,
-                        is_quarantined=0,
-                    )
+            if not conv:
+                raise PermissionError(
+                    f"Cannot append message: session {session_id} does not exist"
+                )
+            if conv.user_id != user_id or conv.is_quarantined != 0:
+                raise PermissionError(
+                    f"Cannot append message: session {session_id} is not owned by user {user_id}"
                 )
 
+            conv.updated_at = datetime.now(timezone.utc)
             session.add(
                 Message(
                     session_id=session_id,
@@ -150,6 +129,7 @@ class DatabaseService:
                 )
             )
             session.commit()
+
 
     def get_chat_history(self, session_id: str, user_id: int) -> Optional[List[Dict]]:
         """
