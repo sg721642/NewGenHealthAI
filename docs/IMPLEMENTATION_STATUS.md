@@ -13,8 +13,9 @@
 | Phase 1B commit | `45d8231f26e56705df1c45d9105016a5b820afd9` |
 | Phase 1C commit | `bbeb67c5eb1e4e728b4d8ad5632f656b9e8e125a` |
 | Phase 1C.1 commit | `d4bc0c14a699b3a37fae0b38839b7ba944503d04` |
+| Phase 1D commit | Pending commit |
 
-| Current phase | Phase 1C.1 — Correct Remaining Authentication and Database Migration Risks |
+| Current phase | Phase 1D — Conversation Memory Isolation, Concurrency and Persistence |
 
 | Git identity | `sg721642 <sg721642@gmail.com>` |
 | Maintainer | Satyam Gupta |
@@ -30,7 +31,7 @@
 
 ## Current Phase
 
-**Phase 1C.1 — Correct Remaining Authentication and Database Migration Risks** ✅ Complete
+**Phase 1D — Conversation Memory Isolation, Concurrency and Persistence** ✅ Complete
 
 ## Completed Tasks
 
@@ -84,19 +85,28 @@
 - [x] **Storage Backup Discipline (OPS-01)**: Preserved all persistent storage files; removed broad deletion patterns; enforced directory-isolated test runs via `tmp_path`.
 - [x] **Complete Backend Test Suite Inventory (OPS-02)**: Executed full 14-module backend test suite (124 passed, 1 skipped, 0 failed), resolved offline LangGraph import guards and dependency stubs in `conftest.py`, and added 13 new regression tests in `test_phase1c1_hardening.py`.
 
+### Phase 1D
+- [x] **Safe Per-Conversation Turn Serialization (A02)**: Implemented reference-counted `ConversationLockManager` in `chat_service.py` ensuring turns in the same conversation serialize cleanly, while concurrent requests on different conversations execute in parallel without mutual blocking. Zero-reference eviction prevents memory leaks.
+- [x] **Clear & Delete Race Guards (A02)**: Generational version tracking (`_versions`) and deletion tombstoning (`_deleted_sessions`) discard in-flight assistant generations if the conversation was cleared or deleted while processing, preventing resurrection or context pollution and returning HTTP 409 Conflict.
+- [x] **Clinical Memory Rehydration on Restart & LRU Eviction (A02, A11)**: Implemented `_get_or_restore_state` bounded to `MAX_RESTORE_TURNS=20` and `MAX_CONVERSATION_CACHE=500`. Reconstructs clinical conversation memory from SQLite history, excluding failed generations (`"Unable to generate response"`).
+- [x] **Frontend In-Flight Abort & Stale Response Suppression**: Integrated `AbortController` in `App.jsx` across conversation switching, new chat, clear, delete, and logout; checks active session and user refs to suppress late responses and eliminate cross-consultation or cross-account contamination.
+- [x] **Rate Limiter Flooding Invariant (SEC-02 Review)**: Refactored `BoundedRateLimiter` to prune expired entries first and strictly preserve active account lockouts (>= 5 failures) during capacity flooding attacks.
+- [x] **Step-Wise Atomic Schema Migration Resilience**: Verified and hardened migration runner (`migrations.py`) where steps v1 and v2 execute inside independent `engine.begin()` blocks, each updating `schema_versions` atomically for safe crash resumption.
+- [x] **Comprehensive Concurrency & Memory Test Suite**: Added 15 new automated regression tests in `test_phase1d_concurrency.py` (total 139 passed, 1 skipped) and 2 new frontend tests in `App.test.jsx` (6/6 passing).
+
 ## Verification Outcomes
 
 | Layer | Check | Tests | Exit Code | Result |
 |---|---|---|---|---|
-| Backend | Pytest (`test_api`, `test_api_edge_cases`, `test_app`, `test_auth_hardening`, `test_coverage_gaps`, `test_database`, `test_engine`, `test_logging`, `test_phase1c1_hardening`, `test_security_ownership`, `test_services`, `test_tools`, `test_workflow`, `test_workflow_routing`) | 124 / 125 (1 skipped) | 0 | ✅ Pass (0 failures) |
-| Frontend | Vitest integration (`App.test.jsx`) | 4 / 4 | 0 | ✅ Pass (0 failures) |
+| Backend | Pytest (`test_agents`, `test_api`, `test_api_edge_cases`, `test_app`, `test_auth_hardening`, `test_coverage_gaps`, `test_database`, `test_logging`, `test_phase1c1_hardening`, `test_phase1d_concurrency`, `test_security_ownership`, `test_services`, `test_tools`, `test_workflow`, `test_workflow_routing`) | 139 / 140 (1 skipped) | 0 | ✅ Pass (0 failures) |
+| Frontend | Vitest integration (`App.test.jsx`) | 6 / 6 | 0 | ✅ Pass (0 failures) |
 | Frontend | Linter (`npm --prefix frontend run lint`) | 0 errors, 0 warnings | 0 | ✅ Pass (100% clean) |
 | Frontend | Build (`npm --prefix frontend run build`) | Vite bundle | 0 | ✅ Pass |
 
 ## Database Migration Status
 
 - Versioned migration runner active: `backend/app/db/migrations.py` (Versions 1 and 2 tracked in `schema_versions`)
-- Atomic transactional boundaries enforced via `engine.begin()`
+- Atomic transactional boundaries enforced via independent `engine.begin()` scopes per migration step
 - Pre-migration SQLite online backup executed with `PRAGMA integrity_check` validation only when schema migration is required
 - Schema v1: conversations table and conservative ownership reconstruction with fail-closed quarantine (`is_quarantined=1, user_id=0`)
 - Schema v2: user_sessions SHA-256 token hashing and explicit session expiration with isolated staging table cutover & validation
@@ -112,10 +122,9 @@
 
 | Phase | Focus Areas | Findings |
 |---|---|---|
-| Phase 2 | Full sync semantics between clinical memory and database on server restart | A11 |
-| Phase 3 | Classifier garbage classes, modality lock correctness, calibrated confidence | A03, A04 |
-| Phase 4 | Workflow cycle termination, LangGraph attempt limits | A05 |
-| Phase 5 | Lazy model loading lifecycle, Dockerfile alignment, run.py cleanup | A09, A12, A14 |
-| Phase 6 | Dependency hygiene, requirements alignment, clinical AI disclaimers | A13, A17 |
-| Phase 7 | End-to-end multi-user verification gates | All gates |
-| Phase 8 | Hugging Face Spaces deployment & validation | Production |
+| Phase 2A | Classifier garbage classes, modality lock correctness, calibrated confidence | A03, A04 |
+| Phase 2B | Workflow cycle termination, LangGraph attempt limits | A05 |
+| Phase 2C | Lazy model loading lifecycle, Dockerfile alignment, run.py cleanup | A09, A12, A14 |
+| Phase 3 | Dependency hygiene, requirements alignment, clinical AI disclaimers | A13, A17 |
+| Phase 4 | End-to-end multi-user verification gates | All gates |
+| Phase 5 | Hugging Face Spaces deployment & validation | Production |

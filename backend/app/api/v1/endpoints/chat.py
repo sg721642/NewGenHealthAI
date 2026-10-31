@@ -76,6 +76,16 @@ async def chat_endpoint(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Conversation not found",
         )
+    except RuntimeError as e:
+        if "cleared or deleted" in str(e).lower() or "no longer exists" in str(e).lower():
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Conversation was cleared or deleted during processing",
+            )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An error occurred while processing the consultation",
+        )
 
 
 @router.post("/clear")
@@ -99,6 +109,8 @@ async def clear_endpoint(
             detail="Conversation not found",
         )
     cleared = clinical_engine.clear_conversation(session_id, user_id=current_user.id)
+    if hasattr(cleared, "__await__"):
+        cleared = await cleared
     if not cleared:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

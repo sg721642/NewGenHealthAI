@@ -1,6 +1,6 @@
 # NewGenHealthAI — Test Evidence & Verification Records
 
-Last updated: Phase 1B (Security and Migration Corrections)
+Last updated: Phase 1D (Conversation Memory Isolation, Concurrency and Persistence)
 
 ## Phase 1B Test Execution Summary
 
@@ -270,4 +270,100 @@ npm --prefix frontend run build
 ```
 - **Exit Code**: 0
 - **Artifacts**: Static bundle successfully output to `../backend/app/static/`
+
+---
+
+## Phase 1D Test Execution Summary
+
+### 1. Complete Backend Test Suite Inventory (Pytest)
+
+Command:
+```bash
+/tmp/nghai_venv/bin/pytest backend/tests/ -v
+```
+
+Outcome:
+- **Total Tests**: 140
+- **Passed**: 139 (99.3%)
+- **Skipped**: 1 (0.7% — `test_create_workflow` requiring optional heavy `langgraph` dependency)
+- **Failed**: 0 (0%)
+- **Duration**: 2.93s
+- **Exit Code**: 0
+
+Test Inventory by Module:
+| Test Module | Total | Passed | Skipped | Failed | Classification |
+|---|---|---|---|---|---|
+| `test_agents.py` | 18 | 18 | 0 | 0 | Passed |
+| `test_api.py` | 12 | 12 | 0 | 0 | Passed |
+| `test_api_edge_cases.py` | 1 | 1 | 0 | 0 | Passed |
+| `test_app.py` | 1 | 1 | 0 | 0 | Passed |
+| `test_auth_hardening.py` | 14 | 14 | 0 | 0 | Passed |
+| `test_coverage_gaps.py` | 9 | 9 | 0 | 0 | Passed |
+| `test_database.py` | 3 | 3 | 0 | 0 | Passed |
+| `test_logging.py` | 4 | 4 | 0 | 0 | Passed |
+| `test_phase1c1_hardening.py` | 13 | 13 | 0 | 0 | Passed |
+| `test_phase1d_concurrency.py` | 15 | 15 | 0 | 0 | Passed |
+| `test_security_ownership.py` | 12 | 12 | 0 | 0 | Passed |
+| `test_services.py` | 11 | 11 | 0 | 0 | Passed |
+| `test_tools.py` | 12 | 12 | 0 | 0 | Passed |
+| `test_workflow.py` | 1 | 1 | 0 | 0 | Passed |
+| `test_workflow_routing.py` | 7 | 6 | 1 | 0 | Passed (1 Skipped) |
+| **Total Suite** | **140** | **139** | **1** | **0** | **Passed** |
+
+Phase 1D Specific Test Details (`test_phase1d_concurrency.py`):
+| Test Name | Concurrency, Memory & Lifecycle Scenario Verified | Outcome |
+|---|---|---|
+| `test_concurrent_turns_same_session_serialized` | 2 concurrent turns on the same conversation serialize via `ConversationLockManager` without interleaving | ✅ Pass |
+| `test_concurrent_turns_different_sessions_parallel` | Concurrent turns across distinct conversations execute in parallel without mutual blocking | ✅ Pass |
+| `test_client_disconnect_cancels_turn_cleanly` | Cancellation (`asyncio.CancelledError`) frees lock context immediately with zero lock leaks | ✅ Pass |
+| `test_provider_exception_releases_lock` | LLM provider exceptions release the conversation lock cleanly; subsequent requests succeed | ✅ Pass |
+| `test_clear_during_active_generation_returns_409` | Generational versioning detects clear during active generation; returns HTTP 409 Conflict | ✅ Pass |
+| `test_delete_during_active_generation_returns_409` | Deletion tombstoning detects delete during active generation; returns HTTP 409 Conflict | ✅ Pass |
+| `test_cleared_session_does_not_resurrect_stale_assistant_turn` | In-flight assistant generation discarded on cleared session; conversation memory not resurrected | ✅ Pass |
+| `test_deleted_session_does_not_resurrect_stale_assistant_turn` | In-flight assistant generation discarded on deleted session; memory state tombstoned | ✅ Pass |
+| `test_history_reconstruction_after_simulated_restart` | `_get_or_restore_state` accurately rehydrates memory turns from SQLite history on cold start | ✅ Pass |
+| `test_long_conversation_history_bounded` | History reconstruction bounded to `MAX_RESTORE_TURNS=20` most recent turns | ✅ Pass |
+| `test_failed_generation_excluded_from_history` | Assistant failure responses (`"Unable to generate response"`) excluded from restored memory context | ✅ Pass |
+| `test_conversation_eviction_from_lru_cache` | When `conversation_states` exceeds 500 sessions, evicted state is seamlessly restored from DB | ✅ Pass |
+| `test_account_switch_no_cross_contamination` | Multi-user isolation in locks, versions, and memory states prevents cross-tenant data leakage | ✅ Pass |
+| `test_bounded_rate_limiter_does_not_evict_active_lockouts` | Flooding rate limiter with dummy keys prunes expired entries first and preserves active lockouts | ✅ Pass |
+| `test_stepwise_schema_migration_recovery` | Schema migrations v1 and v2 execute as independent atomic transactions; safe resumption verified | ✅ Pass |
+
+---
+
+### 2. Frontend Vitest Integration Tests
+
+Command:
+```bash
+npm --prefix frontend test -- --run
+```
+- **Tests**: 6 / 6 passed (100%)
+- **New Tests Added**:
+  - `clears sensitive session state and aborts pending requests on logout`: Verifies `AbortController` cancellation, state wipe, and credentials removal upon logout.
+  - `discards in-flight responses when switching sessions before request completes`: Verifies stale response suppression when active session changes before server response arrives.
+- **Exit Code**: 0
+
+---
+
+### 3. Frontend ESLint Linter
+
+Command:
+```bash
+npm --prefix frontend run lint
+```
+- **Errors**: 0
+- **Warnings**: 0
+- **Exit Code**: 0
+
+---
+
+### 4. Frontend Production Build
+
+Command:
+```bash
+npm --prefix frontend run build
+```
+- **Exit Code**: 0
+- **Artifacts**: Static bundle successfully output to `../backend/app/static/`
+
 

@@ -1,28 +1,100 @@
 """
 NewGenHealthAI — services/chat_service.py
 ClinicalEngine: orchestrates the LangGraph agentic workflow for each chat message.
-Enforces multi-user clinical memory isolation and server-side conversation ownership.
+Enforces multi-user clinical memory isolation, server-side conversation ownership,
+bounded per-conversation asyncio locking, state rehydration from persisted history,
+and clear/delete race guards.
 """
 
+import asyncio
 from collections import OrderedDict
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from app.core.logging_config import logger
-from app.core.state import initialize_conversation_state, reset_query_state
+from app.core.state import AgentState, initialize_conversation_state, reset_query_state
 from app.services.database_service import db_service
 
 
+class ConversationLockManager:
+    """
+    Bounded, reference-counted asyncio.Lock manager for per-conversation serialization.
+    Guarantees that active operations on the same conversation are strictly serialized
+    while different conversations proceed concurrently without unbounded lock leaks.
+
+    Architectural Note:
+    This lock manager provides single-process ASGI event-loop synchronization.
+    For multi-worker deployments, cross-worker safety requires sticky session routing
+    or a distributed lock coordinator (e.g. Redis Redlock).
+    """
+
+    def __init__(self):
+        self._locks: Dict[str, asyncio.Lock] = {}
+        self._ref_counts: Dict[str, int] = {}
+        self._mutex = asyncio.Lock()
+
+    def lock(self, key: str) -> "_LockContext":
+        return _LockContext(self, key)
+
+
+class _LockContext:
+    def __init__(self, manager: ConversationLockManager, key: str):
+        self.manager = manager
+        self.key = key
+        self.lock: Optional[asyncio.Lock] = None
+
+    async def __aenter__(self):
+        async with self.manager._mutex:
+            if self.key not in self.manager._locks:
+                self.manager._locks[self.key] = asyncio.Lock()
+                self.manager._ref_counts[self.key] = 0
+            self.manager._ref_counts[self.key] += 1
+            self.lock = self.manager._locks[self.key]
+
+        acquired = False
+        try:
+            await self.lock.acquire()
+            acquired = True
+            return self
+        except BaseException:
+            # Cancellation or exception during acquire: clean up ref count and lock
+            if acquired and self.lock and self.lock.locked():
+                self.lock.release()
+            async with self.manager._mutex:
+                if self.key in self.manager._ref_counts:
+                    self.manager._ref_counts[self.key] -= 1
+                    if self.manager._ref_counts[self.key] <= 0:
+                        self.manager._locks.pop(self.key, None)
+                        self.manager._ref_counts.pop(self.key, None)
+            raise
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        try:
+            if self.lock and self.lock.locked():
+                self.lock.release()
+        finally:
+            async with self.manager._mutex:
+                if self.key in self.manager._ref_counts:
+                    self.manager._ref_counts[self.key] -= 1
+                    if self.manager._ref_counts[self.key] <= 0:
+                        self.manager._locks.pop(self.key, None)
+                        self.manager._ref_counts.pop(self.key, None)
+
+
 class ClinicalEngine:
-    """Orchestrates the agentic medical intelligence workflow with strict owner isolation."""
+    """Orchestrates the agentic medical intelligence workflow with strict owner isolation and concurrency safety."""
 
     MAX_CONVERSATION_CACHE = 500
+    MAX_RESTORE_TURNS = 20
 
     def __init__(self):
         self.workflow_app = None
         # Memory keyed by f"{user_id}:{session_id}" to guarantee cross-user isolation
         self.conversation_states: OrderedDict[str, Dict] = OrderedDict()
-        logger.info("ClinicalEngine initialized with isolated multi-user memory")
+        self.lock_manager = ConversationLockManager()
+        self._versions: Dict[str, int] = {}
+        self._deleted_sessions: Set[str] = set()
+        logger.info("ClinicalEngine initialized with isolated multi-user memory and per-conversation locks")
 
     def initialize_workflow(self) -> None:
         """Compile and cache the LangGraph workflow (lazy-loaded)."""
@@ -40,82 +112,172 @@ class ClinicalEngine:
         """Construct secure user-scoped memory key."""
         return f"{user_id}:{session_id}"
 
+    def _get_version(self, memory_key: str) -> int:
+        return self._versions.get(memory_key, 1)
+
+    def _bump_version(self, memory_key: str) -> int:
+        new_v = self._versions.get(memory_key, 1) + 1
+        self._versions[memory_key] = new_v
+        return new_v
+
+    def _mark_deleted(self, memory_key: str) -> None:
+        self._deleted_sessions.add(memory_key)
+        self._bump_version(memory_key)
+
+    def _is_deleted(self, memory_key: str) -> bool:
+        return memory_key in self._deleted_sessions
+
+    def _get_or_restore_state(self, session_id: str, user_id: int) -> AgentState:
+        """
+        Retrieve existing in-memory state or safely rehydrate from authorized persisted history.
+        Restores up to MAX_RESTORE_TURNS (20) turns in chronological order,
+        excluding failed/incomplete assistant responses.
+        Derived clinical triage state is cleanly initialized without fabricating decisions.
+        """
+        memory_key = self._get_memory_key(user_id, session_id)
+
+        if memory_key in self.conversation_states:
+            self.conversation_states.move_to_end(memory_key)
+            return self.conversation_states[memory_key]
+
+        # Enforce bounded cache size
+        if len(self.conversation_states) >= self.MAX_CONVERSATION_CACHE:
+            evicted_key, _ = self.conversation_states.popitem(last=False)
+            logger.debug("Evicted oldest conversation memory: %s", evicted_key)
+
+        state = initialize_conversation_state()
+
+        # Rehydrate from authorized database records
+        messages = db_service.get_chat_history(session_id, user_id=user_id)
+        if messages:
+            valid_history = []
+            for msg in messages:
+                content = (msg.get("content") or "").strip()
+                role = msg.get("role", "")
+                if not content:
+                    continue
+                # Exclude failed or error responses from rehydrated context
+                if role == "assistant" and (
+                    "Unable to generate response" in content
+                    or "Sorry, I encountered an error" in content
+                    or "Connection error" in content
+                ):
+                    continue
+                valid_history.append({"role": role, "content": content})
+
+            # Bound history to last MAX_RESTORE_TURNS
+            if len(valid_history) > self.MAX_RESTORE_TURNS:
+                valid_history = valid_history[-self.MAX_RESTORE_TURNS:]
+
+            state["conversation_history"] = valid_history
+            logger.info("Rehydrated %d history turns for session %s, user %s", len(valid_history), session_id[:8], user_id)
+
+        self.conversation_states[memory_key] = state
+        return state
+
     async def process_message(
         self, session_id: str, message: str, user_id: int
     ) -> Dict[str, Any]:
         """
         Run the clinical pipeline for a single user message.
-        Requires authenticated user_id; enforces conversation ownership.
+        Requires authenticated user_id; enforces conversation ownership,
+        per-conversation serialization, and clear/delete race guards.
         """
         if not user_id:
             raise ValueError("user_id is strictly required for clinical processing")
+        if not session_id:
+            raise ValueError("session_id is strictly required for clinical processing")
 
-        # Verify or register conversation ownership
-        conv = db_service.get_or_create_conversation(session_id, user_id)
-        if not conv:
-            logger.warning(
-                "Security violation: user %s attempted to access session %s owned by another user",
-                user_id, session_id[:8]
-            )
-            raise PermissionError(f"Access denied: conversation {session_id} is not owned by user {user_id}")
-
-        logger.info("Processing message for user %s, session %s...", user_id, session_id[:8])
-
-        if not self.workflow_app:
-            raise ValueError("Workflow not initialized")
-
-        # Persist user message under confirmed user ownership
-        db_service.save_message(session_id, "user", message, user_id=user_id)
-
-        # Retrieve or initialize user-isolated conversation state
         memory_key = self._get_memory_key(user_id, session_id)
-        if memory_key not in self.conversation_states:
-            # Enforce bounded in-memory cache
-            if len(self.conversation_states) >= self.MAX_CONVERSATION_CACHE:
-                evicted_key, _ = self.conversation_states.popitem(last=False)
-                logger.debug("Evicted oldest conversation memory: %s", evicted_key)
-            self.conversation_states[memory_key] = initialize_conversation_state()
-        else:
-            # Move to end (most recently used)
-            self.conversation_states.move_to_end(memory_key)
 
-        state = self.conversation_states[memory_key]
-        state = reset_query_state(state)
-        state["question"] = message
+        async with self.lock_manager.lock(memory_key):
+            # 1. Guard against deleted conversations
+            if self._is_deleted(memory_key):
+                raise PermissionError(f"Access denied: conversation {session_id} is deleted")
 
-        # Run workflow
-        try:
-            result = await self.workflow_app.ainvoke(state)
-        except AttributeError:
-            logger.warning("Falling back to sync invoke")
-            result = self.workflow_app.invoke(state)
+            # 2. Verify conversation ownership and non-quarantine status
+            conv = db_service.get_conversation(session_id, user_id)
+            if not conv and hasattr(db_service, "get_or_create_conversation"):
+                conv = db_service.get_or_create_conversation(session_id, user_id)
 
-        self.conversation_states[memory_key].update(result)
+            if not conv:
+                logger.warning(
+                    "Security violation: user %s attempted to access session %s owned by another user",
+                    user_id, session_id[:8]
+                )
+                raise PermissionError(f"Access denied: conversation {session_id} is not owned by user {user_id}")
 
-        response_text = result.get("generation", "Unable to generate response.")
-        source = result.get("source", "Unknown")
+            if not self.workflow_app:
+                raise ValueError("Workflow not initialized")
 
-        # Persist assistant response tagged with owner
-        db_service.save_message(session_id, "assistant", response_text, source, user_id=user_id)
+            # 3. Snapshot generation version to detect concurrent clear/delete
+            version_start = self._get_version(memory_key)
 
-        response_dict = {
-            "response": response_text,
-            "source": source,
-            "timestamp": datetime.now().strftime("%I:%M %p"),
-            "success": bool(result.get("generation")),
-        }
+            # 4. Retrieve or rehydrate conversation state from prior turns
+            state = self._get_or_restore_state(session_id, user_id)
+            state = reset_query_state(state)
+            state["question"] = message
 
-        follow_up_data = result.get("follow_up_data")
-        if follow_up_data and result.get("triage_status") == "needs_info":
-            response_dict["follow_up"] = follow_up_data
-            logger.info("Triage follow-up included in response (round %s)",
-                        follow_up_data.get("triage_round", "?"))
+            # 5. Persist user message under confirmed user ownership
+            db_service.save_message(session_id, "user", message, user_id=user_id)
 
-        return response_dict
+            # 6. Run workflow
+            try:
+                result = await self.workflow_app.ainvoke(state)
+            except AttributeError:
+                logger.warning("Falling back to sync invoke")
+                result = self.workflow_app.invoke(state)
+            except Exception as e:
+                logger.error("Clinical workflow execution error: %s", e)
+                # Never fabricate a successful medical response on failure
+                raise
+
+            # 7. Post-invocation race check: verify conversation was not cleared or deleted during processing
+            version_current = self._get_version(memory_key)
+            if self._is_deleted(memory_key) or version_current != version_start:
+                logger.warning(
+                    "Conversation %s was cleared or deleted during processing (v%d -> v%d); discarding in-flight response",
+                    session_id[:8], version_start, version_current
+                )
+                raise RuntimeError(f"Conversation {session_id} was cleared or deleted during processing")
+
+            # Verify conversation still exists in database
+            conv_after = db_service.get_conversation(session_id, user_id)
+            if not conv_after and hasattr(db_service, "get_or_create_conversation"):
+                conv_after = db_service.get_or_create_conversation(session_id, user_id)
+
+            if not conv_after:
+                logger.warning("Conversation %s was removed from database during processing; discarding response", session_id[:8])
+                raise RuntimeError(f"Conversation {session_id} no longer exists")
+
+            # 8. Update in-memory state
+            self.conversation_states[memory_key].update(result)
+
+            response_text = result.get("generation", "Unable to generate response.")
+            source = result.get("source", "Unknown")
+
+            # Persist assistant response tagged with owner
+            db_service.save_message(session_id, "assistant", response_text, source, user_id=user_id)
+
+            response_dict = {
+                "response": response_text,
+                "source": source,
+                "timestamp": datetime.now().strftime("%I:%M %p"),
+                "success": bool(result.get("generation")),
+            }
+
+            follow_up_data = result.get("follow_up_data")
+            if follow_up_data and result.get("triage_status") == "needs_info":
+                response_dict["follow_up"] = follow_up_data
+                logger.info("Triage follow-up included in response (round %s)",
+                            follow_up_data.get("triage_round", "?"))
+
+            return response_dict
 
     def clear_conversation(self, session_id: str, user_id: int) -> bool:
         """
         Reset in-memory state and clear persisted messages for an owned conversation.
+        Increments conversation version to invalidate any in-flight assistant generation.
         Returns False if conversation is not owned by user_id.
         """
         if not user_id or not session_id:
@@ -126,17 +288,26 @@ class ClinicalEngine:
             return False
 
         memory_key = self._get_memory_key(user_id, session_id)
+        self._bump_version(memory_key)
+
         if memory_key in self.conversation_states:
             self.conversation_states[memory_key] = initialize_conversation_state()
 
-        # Also clear persisted messages in database
+        # Clear persisted messages in database
         db_service.clear_session(session_id, user_id)
         logger.info("Conversation cleared for session %s, user %s", session_id[:8], user_id)
         return True
 
+    async def async_clear_conversation(self, session_id: str, user_id: int) -> bool:
+        """Async variant of clear_conversation that synchronizes on conversation lock."""
+        memory_key = self._get_memory_key(user_id, session_id)
+        async with self.lock_manager.lock(memory_key):
+            return self.clear_conversation(session_id, user_id)
+
     def delete_conversation(self, session_id: str, user_id: int) -> bool:
         """
         Evict in-memory state and delete persisted conversation and messages.
+        Marks conversation deleted to prevent in-flight restorations or resurrection.
         Returns False if conversation is not owned by user_id.
         """
         if not user_id or not session_id:
@@ -147,9 +318,16 @@ class ClinicalEngine:
             return False
 
         memory_key = self._get_memory_key(user_id, session_id)
+        self._mark_deleted(memory_key)
         self.conversation_states.pop(memory_key, None)
 
         return db_service.delete_session(session_id, user_id)
+
+    async def async_delete_conversation(self, session_id: str, user_id: int) -> bool:
+        """Async variant of delete_conversation that synchronizes on conversation lock."""
+        memory_key = self._get_memory_key(user_id, session_id)
+        async with self.lock_manager.lock(memory_key):
+            return self.delete_conversation(session_id, user_id)
 
 
 # Module-level singleton

@@ -160,25 +160,61 @@ class BoundedRateLimiter:
             valid = [t for t in timestamps if now - t < window_seconds]
             return len(valid) < max_requests
 
-    def record_failure(self, key: str, window_seconds: float = 300.0) -> None:
-        """Record a failed attempt under the given key."""
+    def _find_evictable_key(self, now: float, window_seconds: float, lockout_threshold: int = 5) -> Optional[str]:
+        """
+        Find a candidate key that can be safely evicted under capacity pressure.
+        CRITICAL SECURITY INVARIANT:
+        Never evict a key that represents an active lockout (valid attempts >= lockout_threshold).
+        If candidates exist with fewer than lockout_threshold attempts, returns the one with the oldest last activity.
+        If all keys represent active lockouts, returns None (preserving all active security counters).
+        """
+        candidate_key = None
+        oldest_ts = float("inf")
+
+        for k, timestamps in self._buckets.items():
+            valid = [t for t in timestamps if now - t < window_seconds]
+            if len(valid) < lockout_threshold:
+                last_ts = max(valid) if valid else 0.0
+                if last_ts < oldest_ts:
+                    oldest_ts = last_ts
+                    candidate_key = k
+
+        return candidate_key
+
+    def record_failure(self, key: str, window_seconds: float = 300.0, lockout_threshold: int = 5) -> None:
+        """
+        Record a failed attempt under the given key.
+        Preserves active security lockouts even under capacity exhaustion.
+        """
         now = time.time()
         with self._lock:
             if now - self._last_prune > self.prune_interval:
                 self._prune(now, max_window=max(window_seconds, self.prune_interval))
 
-            if len(self._buckets) >= self.max_entries and key not in self._buckets:
+            if key not in self._buckets and len(self._buckets) >= self.max_entries:
                 self._prune(now, max_window=window_seconds)
                 if len(self._buckets) >= self.max_entries:
-                    oldest_key = next(iter(self._buckets))
-                    del self._buckets[oldest_key]
+                    evictable = self._find_evictable_key(now, window_seconds, lockout_threshold)
+                    if evictable is not None:
+                        del self._buckets[evictable]
+                    else:
+                        # Limiter is fully saturated with active lockouts.
+                        # Preserve all existing lockouts without unbounded memory allocation.
+                        logger.warning(
+                            "Rate limiter at capacity (%d entries) with active lockouts; preserving security counters",
+                            self.max_entries
+                        )
+                        return
 
             if key not in self._buckets:
                 self._buckets[key] = []
             self._buckets[key].append(now)
 
     def check_and_record(self, key: str, max_requests: int, window_seconds: float) -> bool:
-        """Check whether action is allowed; if allowed, records timestamp. Returns True if allowed."""
+        """
+        Check whether action is allowed; if allowed, records timestamp. Returns True if allowed.
+        Fails closed with safe overload rejection if capacity is exhausted with all active entries.
+        """
         now = time.time()
         with self._lock:
             if now - self._last_prune > self.prune_interval:
@@ -190,11 +226,15 @@ class BoundedRateLimiter:
                 self._buckets[key] = valid
                 return False
 
-            if len(self._buckets) >= self.max_entries and key not in self._buckets:
+            if key not in self._buckets and len(self._buckets) >= self.max_entries:
                 self._prune(now, max_window=window_seconds)
                 if len(self._buckets) >= self.max_entries:
-                    oldest_key = next(iter(self._buckets))
-                    del self._buckets[oldest_key]
+                    evictable = self._find_evictable_key(now, window_seconds, lockout_threshold=max_requests)
+                    if evictable is not None:
+                        del self._buckets[evictable]
+                    else:
+                        logger.warning("Rate limiter registration capacity saturated; failing closed for key %s", key)
+                        return False
 
             valid.append(now)
             self._buckets[key] = valid

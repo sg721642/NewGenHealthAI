@@ -2229,12 +2229,32 @@ export default function App() {
   });
   const [authToken, setAuthToken] = useState(() => localStorage.getItem('auth_token') || null);
 
-  const handleAuthSuccess = useCallback((userData, token) => {
-    setUser(userData);
-    setAuthToken(token);
+  const activeAbortRef = useRef(null);
+  const currentSessionIdRef = useRef(null);
+  const currentUserRef = useRef(user);
+  useEffect(() => { currentUserRef.current = user; }, [user]);
+
+  const abortPendingRequests = useCallback(() => {
+    if (activeAbortRef.current) {
+      activeAbortRef.current.abort();
+      activeAbortRef.current = null;
+    }
   }, []);
 
+  const handleAuthSuccess = useCallback((userData, token) => {
+    abortPendingRequests();
+    setUser(userData);
+    setAuthToken(token);
+    setMessages([]);
+    setChatHistory([]);
+    setSessions(null);
+    setCurrentSessionId(null);
+    currentSessionIdRef.current = null;
+    setShowWelcome(true);
+  }, [abortPendingRequests]);
+
   const handleLogout = useCallback(async () => {
+    abortPendingRequests();
     try {
       if (authToken) {
         await fetch(`${API_BASE}/auth/logout`, {
@@ -2251,8 +2271,9 @@ export default function App() {
     setChatHistory([]);
     setSessions(null);
     setCurrentSessionId(null);
+    currentSessionIdRef.current = null;
     setShowWelcome(true);
-  }, [authToken]);
+  }, [authToken, abortPendingRequests]);
 
   // Helper: build auth headers
   const authHeaders = useCallback((extra = {}) => {
@@ -2264,6 +2285,7 @@ export default function App() {
 
   const [sessions, setSessions] = useState(null);
   const [currentSessionId, setCurrentSessionId] = useState(null);
+  useEffect(() => { currentSessionIdRef.current = currentSessionId; }, [currentSessionId]);
   const [messages, setMessages] = useState([]);
   const [chatHistory, setChatHistory] = useState([]);
   const [showWelcome, setShowWelcome] = useState(true);
@@ -2381,11 +2403,13 @@ export default function App() {
 
   // Load session
   const loadSession = useCallback(async (sessionId) => {
+    abortPendingRequests();
     try {
       const res = await fetch(`${API_BASE}/session/${sessionId}`, { headers: authHeaders() });
       const data = await res.json();
       if (data.success) {
         setCurrentSessionId(sessionId);
+        currentSessionIdRef.current = sessionId;
         const msgs = data.messages.map(m => ({
           type: m.role === 'user' ? 'user' : 'assistant',
           content: m.content, timestamp: m.timestamp || '', source: m.source || null,
@@ -2394,38 +2418,41 @@ export default function App() {
         showToast('Session loaded', 'success');
       }
     } catch { showToast('Failed to load session', 'error'); }
-  }, [showToast, authHeaders]);
-
-  // Delete session
-  const deleteSession = useCallback(async (sessionId) => {
-    if (!window.confirm('Delete this conversation?')) return;
-    try {
-      const res = await fetch(`${API_BASE}/session/${sessionId}`, { method: 'DELETE', headers: authHeaders() });
-      if (res.ok) {
-        await loadSessions();
-        if (currentSessionId === sessionId) createNewChat();
-        showToast('Conversation deleted', 'success');
-      }
-    } catch { showToast('Failed to delete', 'error'); }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentSessionId, loadSessions, showToast, authHeaders]);
+  }, [showToast, authHeaders, abortPendingRequests]);
 
   // New chat
   const createNewChat = useCallback(async () => {
+    abortPendingRequests();
     try {
       const res = await fetch(`${API_BASE}/new-chat`, { method: 'POST', headers: authHeaders() });
       if (res.ok) {
         const data = await res.json();
         setMessages([]); setChatHistory([]); setCurrentSessionId(data.session_id || null);
+        currentSessionIdRef.current = data.session_id || null;
         setShowWelcome(true); await loadSessions();
         showToast('New conversation started', 'success');
       }
     } catch { showToast('Failed to create chat', 'error'); }
-  }, [authHeaders, loadSessions, showToast]);
+  }, [authHeaders, loadSessions, showToast, abortPendingRequests]);
+
+  // Delete session
+  const deleteSession = useCallback(async (sessionId) => {
+    if (!window.confirm('Delete this conversation?')) return;
+    if (currentSessionIdRef.current === sessionId) abortPendingRequests();
+    try {
+      const res = await fetch(`${API_BASE}/session/${sessionId}`, { method: 'DELETE', headers: authHeaders() });
+      if (res.ok) {
+        await loadSessions();
+        if (currentSessionIdRef.current === sessionId) createNewChat();
+        showToast('Conversation deleted', 'success');
+      }
+    } catch { showToast('Failed to delete', 'error'); }
+  }, [loadSessions, showToast, authHeaders, abortPendingRequests, createNewChat]);
 
   // Clear chat
   const clearChat = useCallback(async () => {
     if (!window.confirm('Clear this conversation?')) return;
+    abortPendingRequests();
     try {
       const res = await fetch(`${API_BASE}/clear`, { method: 'POST', headers: authHeaders() });
       if (res.ok) {
@@ -2433,7 +2460,7 @@ export default function App() {
         showToast('Conversation cleared', 'success');
       }
     } catch { showToast('Failed to clear', 'error'); }
-  }, [showToast, authHeaders]);
+  }, [showToast, authHeaders, abortPendingRequests]);
 
   // Download
   const downloadChat = useCallback(() => {
@@ -2548,18 +2575,38 @@ export default function App() {
     setInputValue('');
     if (inputRef.current) inputRef.current.style.height = 'auto';
     setIsTyping(true);
+
+    abortPendingRequests();
+    const controller = new AbortController();
+    activeAbortRef.current = controller;
+    const targetSessionId = currentSessionId;
+    const targetUserId = user?.user_id || user?.id;
+
     try {
       const res = await fetch(`${API_BASE}/chat`, {
         method: 'POST',
         headers: authHeaders({
           'Content-Type': 'application/json',
-          ...(currentSessionId ? { 'X-Session-ID': currentSessionId } : {}),
+          ...(targetSessionId ? { 'X-Session-ID': targetSessionId } : {}),
         }),
         body: JSON.stringify({ message }),
+        signal: controller.signal,
       });
+
+      // Guard: discard if aborted or user switched session/account in flight
+      if (controller.signal.aborted) return;
+      if (currentSessionIdRef.current !== targetSessionId) return;
+      const currentUid = currentUserRef.current?.user_id || currentUserRef.current?.id;
+      if (currentUid !== targetUserId) return;
+
+      if (res.status === 409) {
+        showToast('Conversation was cleared or modified while message was generating.', 'info');
+        return;
+      }
       if (res.status === 404) {
         showToast('Conversation not found or expired. Starting a fresh consultation.', 'info');
         setCurrentSessionId(null);
+        currentSessionIdRef.current = null;
         setMessages(prev => [...prev, {
           type: 'assistant',
           content: 'This conversation was not found or has expired. A fresh session has been started.',
@@ -2570,6 +2617,7 @@ export default function App() {
       }
       const data = await res.json();
       if (data.success) {
+        if (currentSessionIdRef.current !== targetSessionId) return;
         const botMsg = {
           type: 'assistant',
           content: data.response,
@@ -2589,11 +2637,19 @@ export default function App() {
         setMessages(prev => [...prev, { type: 'assistant', content: 'Sorry, I encountered an error. Please try again.', timestamp: new Date().toLocaleTimeString() }]);
         showToast('Error occurred', 'error');
       }
-    } catch {
+    } catch (err) {
+      if (err && err.name === 'AbortError') {
+        return;
+      }
       setMessages(prev => [...prev, { type: 'assistant', content: 'Connection error. Please check your internet and try again.', timestamp: new Date().toLocaleTimeString() }]);
       showToast('Connection error', 'error');
-    } finally { setIsTyping(false); }
-  }, [inputValue, isTyping, loadSessions, showToast, authHeaders, currentSessionId]);
+    } finally {
+      if (activeAbortRef.current === controller) {
+        activeAbortRef.current = null;
+      }
+      setIsTyping(false);
+    }
+  }, [inputValue, isTyping, loadSessions, showToast, authHeaders, currentSessionId, user, abortPendingRequests]);
 
   const handleQuickQuestion = useCallback((q) => { setTimeout(() => sendMessage(q), 200); }, [sendMessage]);
 

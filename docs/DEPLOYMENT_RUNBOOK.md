@@ -47,24 +47,46 @@ GitHub (sg721642/NewGenHealthAI)
 
 ## Database Migration & Safety Runbook (MIG-01, MIG-02, OPS-01)
 
-Phase 1C.1 runs `backend/app/db/migrations.py` (Current Schema Version: 2):
+Phase 1D runs `backend/app/db/migrations.py` (Current Schema Version: 2):
 1. **Pre-check & Runaway Backup Prevention**: The migration runner checks `schema_versions` first. If the schema is already at or above `CURRENT_SCHEMA_VERSION` (2), migration and backup creation are skipped entirely.
 2. **SQLite Online Backup API**: If a schema migration is required and a database exists, a point-in-time snapshot is created using SQLite's Online Backup API (`src.backup(dst)`). This guarantees consistency even with active WAL mode concurrency.
 3. **Backup Preservation Discipline (OPS-01)**: No blanket file deletion commands (`rm -f *.backup_*`) are ever run against `backend/storage/chat_db/`. All test suites use isolated `tmp_path` environments.
 4. **Integrity Validation**: All backups and restores are validated with `PRAGMA integrity_check` before proceeding.
-5. **Schema Version 1 Tracking & Fail-Closed Quarantine (MIG-02)**:
-   - `conversations` table ensures explicit conversation ownership.
-   - If `users` table is missing or user does not exist in `users`, sessions fail closed into quarantine (`is_quarantined=1, user_id=0`). Original message records are preserved intact without modification or backfilling.
-6. **Atomic Transactional Migration (MIG-01)**:
-   - Upgrades `user_sessions` to schema v2 via an isolated staging table (`_user_sessions_staging_<uuid>`).
-   - Validates row counts (staging count == distinct valid legacy tokens), SHA-256 hash formatting (64 hex characters), and table schema within a single transactional boundary (`engine.begin()`).
-   - If validation fails, transaction rolls back automatically without dropping or modifying legacy `user_sessions`.
-   - On successful validation, table cutover and schema version 2 tracking commit atomically.
-7. **Recovery Procedure**:
+5. **Step-Wise Independent Atomic Migrations**:
+   - Migrations are structured as **step-wise independent atomic transactions**, where each schema version step runs in its own atomic `engine.begin()` transaction with an explicit version marker recorded in `schema_versions`.
+   - **Step 1 (Version 1)**: Creates `conversations` table, reconstructs ownership conservatively, and marks version 1. If `users` table is missing or user does not exist, sessions fail closed into quarantine (`is_quarantined=1, user_id=0`) without altering original message records.
+   - **Step 2 (Version 2)**: Staged migration for `user_sessions` via temporary table (`_user_sessions_staging_<uuid>`). Validates row counts, SHA-256 hash formatting (64 hex chars), and schema columns before cutover. If validation fails, Step 2 rolls back cleanly without dropping legacy tables.
+   - **Recovery & Resumability**: If a failure or process interruption occurs between Step 1 and Step 2, the database remains in a consistent v1 state. Upon next startup, the runner detects `latest_version == 1` and safely resumes execution at Step 2 without re-running Step 1 or corrupting state.
+6. **Recovery Procedure**:
    ```python
    from app.db.migrations import restore_database
    restore_database("backend/storage/chat_db/susham_health.db.backup_<timestamp>_<uuid>", "backend/storage/chat_db/susham_health.db")
    ```
+
+## Concurrency & Clinical Memory Architecture (Phase 1D)
+
+1. **Per-Conversation Async Serialization (`ConversationLockManager`)**:
+   - Bounded, reference-counted `asyncio.Lock` per `user_id:session_id` pair.
+   - Ensures simultaneous turns in the same consultation are processed sequentially in strict chronological order.
+   - Different consultations process concurrently without blocking each other.
+   - Locks are automatically evicted when reference count reaches 0, preventing unbounded lock memory leaks.
+   - Process-Local Note: Designed for single-process ASGI event loops. For horizontal scaling across multiple Uvicorn workers or container replicas, sticky session routing or a distributed coordinator (e.g. Redis Redlock) is required.
+2. **Clear & Delete Race Guards**:
+   - Generational versioning (`_versions`) and deletion tombstoning (`_deleted_sessions`) detect when a conversation is cleared or deleted while an LLM inference request is in flight.
+   - In-flight responses are safely discarded without updating in-memory cache or persisting assistant turns to DB, returning HTTP 409 Conflict.
+   - Prevents delayed or stale responses from resurrecting deleted conversations or reintroducing cleared context.
+3. **Clinical Memory Rehydration from Persisted History**:
+   - Upon server restart or LRU cache eviction (`MAX_CONVERSATION_CACHE = 500`), state is rehydrated from authorized database records.
+   - Restores up to `MAX_RESTORE_TURNS = 20` turns in chronological order.
+   - Excludes failed or incomplete assistant responses (`"Unable to generate response"`, error messages).
+   - Derived clinical triage state starts cleanly initialized without synthesizing unverified historical medical decisions.
+4. **Frontend Stale Response & Account Switch Protection**:
+   - `AbortController` cleanly cancels in-flight `/chat` network requests when switching sessions, starting new consultations, clearing, deleting, or logging out.
+   - Active session ref (`currentSessionIdRef`) and active user ref (`currentUserRef`) guarantee that late network responses cannot cross-contaminate different conversations or subsequent user sessions.
+5. **Bounded Rate Limiter Overload Policy**:
+   - Under capacity exhaustion (10,000 keys), `BoundedRateLimiter` prunes expired entries first.
+   - Active security counters (accounts with failed login lockouts >= threshold) are strictly preserved and never evicted to admit new identifiers.
+   - Safe overload shedding fails closed on registration if the capacity is completely saturated with active entries.
 
 ## Local Development Quick Start
 
@@ -98,8 +120,12 @@ npm --prefix frontend run dev
 - [x] Conservative legacy ownership reconstruction (no NULL backfill) verified (A02, MIG-02)
 - [x] Untrusted reverse proxy headers ignored, trusted proxy CIDR traversal enforced (SEC-01)
 - [x] Bounded in-memory sliding-window rate limiting on register and login with per-account lockouts (SEC-02)
-- [x] Atomic transactional staging migrations with pre-cutover validation and rollback (MIG-01)
-- [x] Complete backend test suite inventory verified (124 passed, 1 skipped)
-- [x] Frontend build clean with lint passing (0 errors, 0 warnings, 4/4 tests pass)
+- [x] Rate-limiter capacity flooding preserves active lockouts without eviction (SEC-02 / Phase 1D)
+- [x] Step-wise independent atomic schema migrations with safe resumption verified (MIG-01 / Phase 1D)
+- [x] Bounded per-conversation asyncio locking and clear/delete race guards implemented (Phase 1D / A02)
+- [x] Clinical memory rehydration after restart and cache eviction verified (Phase 1D / A02)
+- [x] Frontend AbortController and account switch state wipe verified (Phase 1D / A02)
+- [x] Complete backend test suite inventory verified (139 passed, 1 skipped)
+- [x] Frontend build clean with lint passing (0 errors, 0 warnings, 6/6 tests pass)
 - [ ] HF Space running status verified with live credentials (post-deployment)
 

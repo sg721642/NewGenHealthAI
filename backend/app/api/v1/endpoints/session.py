@@ -92,6 +92,8 @@ async def delete_session_endpoint(
     Fails with 404 if session not owned or not found.
     """
     deleted = clinical_engine.delete_conversation(session_id, user_id=current_user.id)
+    if hasattr(deleted, "__await__"):
+        deleted = await deleted
     if not deleted:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

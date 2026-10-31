@@ -162,7 +162,7 @@ def run_database_migration(engine_instance, db_path: Optional[str] = None) -> Di
         latest_version = conn.execute(text("SELECT MAX(version) FROM schema_versions")).scalar() or 0
 
     # ── Step 1: Version 1 Migration (Conversations & Ownership Reconstruction) ──
-    if latest_version < 1:
+    if latest_version < 1 and CURRENT_SCHEMA_VERSION >= 1:
         with engine_instance.begin() as conn:
             inspector = inspect(engine_instance)
             table_names = inspector.get_table_names()
@@ -275,7 +275,7 @@ def run_database_migration(engine_instance, db_path: Optional[str] = None) -> Di
         latest_version = 1
 
     # ── Step 2: Version 2 Migration (user_sessions Token Hashing & Expiration) ──
-    if latest_version < 2:
+    if latest_version < 2 and CURRENT_SCHEMA_VERSION >= 2:
         with engine_instance.begin() as conn:
             inspector = inspect(engine_instance)
             table_names = inspector.get_table_names()
