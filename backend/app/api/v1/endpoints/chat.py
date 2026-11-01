@@ -70,6 +70,11 @@ async def chat_endpoint(
         return await clinical_engine.process_message(
             session_id, request.message, user_id=current_user.id
         )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(e),
+        )
     except PermissionError:
         # Fails closed without disclosing existence of other user's session
         raise HTTPException(

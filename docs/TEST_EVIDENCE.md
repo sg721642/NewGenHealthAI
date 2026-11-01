@@ -472,5 +472,108 @@ npm --prefix frontend run build
   - `../backend/app/static/assets/index-CB66vf3N.css` (18.46 kB)
   - `../backend/app/static/assets/index-DkjXr3wK.js` (397.18 kB)
 
+---
 
+## Phase 2B Test Execution Summary
 
+### 1. Backend Bounded Clinical Workflow, Emergency Handling, and Medical-Response Safety (Pytest)
+
+Command:
+```bash
+/tmp/nghai_venv/bin/pytest backend/tests/ -v
+```
+
+Outcome:
+- **Total Tests**: 199
+- **Passed**: 199 (100%)
+- **Failed**: 0
+- **Skipped**: 0
+- **Duration**: 2.75s
+- **Exit Code**: 0
+
+Suite Breakdown:
+| Test File | Total | Passed | Failed | Skipped | Status |
+|---|---|---|---|---|---|
+| `test_agents.py` | 18 | 18 | 0 | 0 | Passed |
+| `test_api.py` | 10 | 10 | 0 | 0 | Passed |
+| `test_api_edge_cases.py` | 12 | 12 | 0 | 0 | Passed |
+| `test_app.py` | 7 | 7 | 0 | 0 | Passed |
+| `test_auth_hardening.py` | 13 | 13 | 0 | 0 | Passed |
+| `test_coverage_gaps.py` | 7 | 7 | 0 | 0 | Passed |
+| `test_database.py` | 3 | 3 | 0 | 0 | Passed |
+| `test_logging.py` | 4 | 4 | 0 | 0 | Passed |
+| `test_phase1c1_hardening.py` | 16 | 16 | 0 | 0 | Passed |
+| `test_phase1d_concurrency.py` | 15 | 15 | 0 | 0 | Passed |
+| `test_phase2a_image_classifier.py` | 36 | 36 | 0 | 0 | Passed |
+| `test_phase2b_workflow_safety.py` | 23 | 23 | 0 | 0 | Passed |
+| `test_security_ownership.py` | 12 | 12 | 0 | 0 | Passed |
+| `test_services.py` | 11 | 11 | 0 | 0 | Passed |
+| `test_tools.py` | 12 | 12 | 0 | 0 | Passed |
+| `test_workflow.py` | 1 | 1 | 0 | 0 | Passed |
+| `test_workflow_routing.py` | 7 | 7 | 0 | 0 | Passed |
+| **Total Suite** | **199** | **199** | **0** | **0** | **Passed** |
+
+Phase 2B Verification Matrix (`test_phase2b_workflow_safety.py`):
+| Verification Scenario | Scenario Description & Clinical Safety Guarantee | Test Function | Outcome |
+|---|---|---|---|
+| **Emergency Gate: Cardiac** | Acute coronary symptoms (crushing chest pain radiating to arm/jaw) trigger immediate 911 advisory without symptom follow-up or speculative diagnosis | `test_urgent_risk_cardiac` | ✅ Pass |
+| **Emergency Gate: Stroke** | FAST symptoms (facial droop, arm weakness, slurred speech) trigger emergency alert | `test_urgent_risk_stroke` | ✅ Pass |
+| **Emergency Gate: Respiratory** | Severe dyspnea / cyanosis / stridor triggers emergency alert | `test_urgent_risk_respiratory` | ✅ Pass |
+| **Emergency Gate: Anaphylaxis** | Acute airway closing, tongue/throat swelling after allergen triggers emergency alert | `test_urgent_risk_anaphylaxis` | ✅ Pass |
+| **Emergency Gate: Hemorrhage** | Uncontrolled bleeding / hematemesis triggers emergency alert | `test_urgent_risk_hemorrhage` | ✅ Pass |
+| **Emergency Gate: Crisis** | Acute self-harm / suicidal ideation triggers 988 Suicide & Crisis Lifeline | `test_urgent_risk_crisis` | ✅ Pass |
+| **Emergency Bypass Routing** | Planner routes urgent flags directly to executor (`_route_after_planner == "executor"`); triage node bypassed | `test_urgent_risk_planner_routing` | ✅ Pass |
+| **100% Offline Emergency Gate** | Urgent detection executes in pure deterministic Python when Groq LLM, ChromaDB, Wikipedia, and Tavily are offline | `test_urgent_risk_100_percent_offline` | ✅ Pass |
+| **Non-Urgent Preservation** | Mild routine complaints (colds, mild cough) are not falsely routed to emergency path | `test_non_urgent_query_does_not_trigger_emergency` | ✅ Pass |
+| **Bounded Routing: Retriever First** | When retriever fails, graph routes to LLM; if LLM fails, falls back to Wikipedia/Tavily/Executor without looping back | `test_bounded_routing_retriever_first_both_fail` | ✅ Pass |
+| **Bounded Routing: LLM First** | When LLM fails, graph routes to retriever; if retriever fails, falls back to Wikipedia/Tavily/Executor without looping back | `test_bounded_routing_llm_first_both_fail` | ✅ Pass |
+| **StateGraph Real Execution: Exhaustion** | Real compiled LangGraph executes offline; visits each provider at most once; terminates at executor with `is_failed_generation=True` and `source="Service Unavailable"` | `test_real_compiled_workflow_execution_total_provider_failure` | ✅ Pass |
+| **StateGraph Real Execution: RAG Success** | Real compiled LangGraph executes RAG pipeline successfully when documents are retrieved | `test_real_compiled_workflow_execution_rag_success` | ✅ Pass |
+| **Triage Persona De-escalation** | Prompts in triage agent remove physician impersonation, doctor claims, and clinical examination assertions | `test_triage_prompts_do_not_claim_physician_status` | ✅ Pass |
+| **No Forced Diagnosis at Round 3** | Triage round 3 transitions to educational summary with explicit uncertainty rather than forcing diagnosis | `test_triage_round_3_does_not_force_diagnosis` | ✅ Pass |
+| **Executor Persona & Dosage Ban** | Executor agent prompt forbids physician impersonation, prescription drug recommendations, and dosage guidance | `test_executor_prompts_do_not_claim_physician_status` | ✅ Pass |
+| **JSON Parser Resilience** | Extracts JSON from markdown code blocks, raw strings, and handles trailing commas | `test_extract_json_resilience` | ✅ Pass |
+| **Triage Malformed JSON Handling** | Invalid/corrupted LLM outputs default safely to `ready_to_diagnose` without crashing | `test_triage_handles_malformed_json_gracefully` | ✅ Pass |
+| **Input Validation: Whitespace** | Empty and whitespace-only messages rejected with `ValueError` | `test_empty_or_whitespace_message_rejected` | ✅ Pass |
+| **Input Validation: Length** | Messages exceeding 4000 characters rejected with `ValueError` | `test_oversized_message_rejected` | ✅ Pass |
+| **Prompt Injection Neutralization** | Delimiter breakout and prompt injection strings in retrieved documents are sanitized | `test_prompt_injection_sanitization_in_documents` | ✅ Pass |
+| **Source Provenance Formatting** | Document metadata (title, URL) cited only when verified provenance exists | `test_source_provenance_formatting` | ✅ Pass |
+| **Failed Generation Non-Persistence** | Provider exhaustion returns `success=False` and skips persisting failed assistant responses to database | `test_failed_generation_not_persisted_as_successful` | ✅ Pass |
+
+---
+
+### 2. Frontend Vitest Integration Tests
+
+Command:
+```bash
+npm --prefix frontend test -- --run
+```
+- **Tests**: 11 / 11 passed (100%)
+- **Duration**: 330ms
+- **Exit Code**: 0
+
+---
+
+### 3. Frontend ESLint Linter
+
+Command:
+```bash
+npm --prefix frontend run lint
+```
+- **Errors**: 0
+- **Warnings**: 0
+- **Exit Code**: 0
+
+---
+
+### 4. Frontend Production Build (Vite)
+
+Command:
+```bash
+npm --prefix frontend run build
+```
+- **Exit Code**: 0
+- **Output**:
+  - `../backend/app/static/index.html` (0.68 kB)
+  - `../backend/app/static/assets/index-CB66vf3N.css` (18.46 kB)
+  - `../backend/app/static/assets/index-DkjXr3wK.js` (397.18 kB)

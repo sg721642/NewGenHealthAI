@@ -1,7 +1,4 @@
-"""
-NewGenHealthAI — agents/tavily.py
-TavilyAgent: searches the web via Tavily for current medical information.
-"""
+import re
 
 from langchain_core.documents import Document
 
@@ -10,17 +7,37 @@ from app.core.state import AgentState
 from app.tools.tavily_search import get_tavily_search
 
 
+def _build_safe_tavily_query(text: str) -> str:
+    """Extract safe generic search terms without leaking personal details or narrative."""
+    if not text:
+        return "medical conditions and symptoms"
+    cleaned = re.sub(
+        r"\b(?:i\s+have|i\s+am|i\'?m|my|me|patient|he|she|his|her|we|our|the\s+patient\s+reported)\b",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    words = [w for w in re.findall(r"\b[A-Za-z0-9_-]+\b", cleaned) if len(w) > 2]
+    safe_terms = " ".join(words[:6]) if words else "medical health"
+    return f"{safe_terms} health medical symptoms"
+
+
 def TavilyAgent(state: AgentState) -> AgentState:
-    """Search the web via Tavily for current medical research and news."""
+    """Search the web via Tavily for current medical research and news as a bounded fallback."""
+    attempted = list(state.get("attempted_providers", []))
+    if "tavily" not in attempted:
+        attempted.append("tavily")
+    state["attempted_providers"] = attempted
+    state["tavily_attempted"] = True
+
     tavily = get_tavily_search()
     if not tavily:
         state["documents"] = []
         state["tavily_success"] = False
-        state["tavily_attempted"] = True
         return state
 
-    search_query = f"{state['question']} medical health treatment symptoms"
     try:
+        search_query = _build_safe_tavily_query(state.get("question", ""))
         results = tavily.invoke(search_query)
     except Exception as e:
         logger.error("Tavily: Search failed: %s", str(e))
@@ -48,5 +65,4 @@ def TavilyAgent(state: AgentState) -> AgentState:
         state["tavily_success"] = False
         logger.info("Tavily: No valid results")
 
-    state["tavily_attempted"] = True
     return state

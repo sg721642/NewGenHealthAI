@@ -16,7 +16,7 @@
 | Phase 1D commit | `256c86d649d0dd67c916892664d7f41d7919fabc` |
 | Phase 2A commit | `b67abedd2a69b141e450372099c186ca73e48bd6` |
 
-| Current phase | Phase 2A — Critical Image-Classification Correctness and Safe Inference |
+| Current phase | Phase 2B — Bounded Clinical Workflow and Medical-Response Safety |
 
 | Git identity | `sg721642 <sg721642@gmail.com>` |
 | Maintainer | Satyam Gupta |
@@ -32,7 +32,7 @@
 
 ## Current Phase
 
-**Phase 2A — Critical Image-Classification Correctness and Safe Inference** ✅ Complete
+**Phase 2B — Bounded Clinical Workflow and Medical-Response Safety** ✅ Complete
 
 ## Completed Tasks
 
@@ -105,11 +105,22 @@
 - [x] **Elimination of False Confidence Calibration (A04)**: Removed misleading `calibrated_confidence` calculations; returned uncalibrated raw model scores (`score`), with clear UI label `"Model Finding"` and `"Uncalibrated Model Score: X.XXXX"` alongside research prototype disclaimers.
 - [x] **Comprehensive Offline Test Matrix & Frontend Tests**: Created `test_phase2a_image_classifier.py` covering the full 20-scenario offline matrix (36 tests passed). Added 5 vitest image integration tests covering all 5 response statuses (11/11 passed).
 
+### Phase 2B
+- [x] **Infinite Cycle Termination & Bounded Fallback (A05)**: Terminated the infinite circular routing between `llm_agent` and `retriever`. Implemented a strictly bounded DAG with single-visit provider budgets per turn (`retriever` -> `llm_agent` -> `wikipedia` -> `tavily` -> `executor`).
+- [x] **Deterministic Urgent-Risk Emergency Gate**: Added pure offline, zero-dependency emergency screening in `urgent_care.py` and `PlannerAgent`. Immediately returns 911 / 999 / 112 / ED advisories for cardiac, stroke (FAST), respiratory distress, anaphylaxis, severe hemorrhage, and crisis/self-harm without asking triage follow-ups or speculating.
+- [x] **100% Offline Emergency Path**: Verified urgent gate operates independently of external LLMs, vector store, or network services, guaranteeing emergency escalation availability during full service outages.
+- [x] **Elimination of Physician Impersonation (A17)**: Replaced physician personas in `triage_agent.py`, `llm_agent.py`, and `executor.py` with automated educational assistant persona. Explicitly prohibited claims of clinical physician status, in-person examination, or definitive medical diagnosis.
+- [x] **Elimination of Forced Diagnoses & Drug Dosages (A17)**: Replaced forced diagnosis after 3 triage rounds with an educational summary acknowledging uncertainties and advising clinical evaluation. Eliminated all prescription recommendations and drug dosage guidance.
+- [x] **Resilient JSON & Input Validation**: Hardened triage JSON parser to handle markdown blocks and trailing commas. Validated user messages in `chat_service.py` (rejecting empty/whitespace messages and >4000 char messages with HTTP 422).
+- [x] **Prompt Injection Sanitization & Verified Provenance**: Sanitized delimiter breakout attempts in retrieved documents. Restricted source citations to documents with verified metadata (title, URL) to prevent hallucinated citations.
+- [x] **Failed-Generation Persistence Safety**: Guaranteed that provider exhaustion returns `success=False`, `source="Service Unavailable"` and is not persisted to the database as a successful clinical consultation.
+- [x] **Real LangGraph Compilation & 23-Test Suite**: Compiled and executed StateGraph offline with mocked providers in `test_phase2b_workflow_safety.py` (23/23 tests passing, total backend suite: 199/199 passing).
+
 ## Verification Outcomes
 
 | Layer | Check | Tests | Exit Code | Result |
 |---|---|---|---|---|
-| Backend | Pytest (`test_agents`, `test_api`, `test_api_edge_cases`, `test_app`, `test_auth_hardening`, `test_coverage_gaps`, `test_database`, `test_logging`, `test_phase1c1_hardening`, `test_phase1d_concurrency`, `test_phase2a_image_classifier`, `test_security_ownership`, `test_services`, `test_tools`, `test_workflow`, `test_workflow_routing`) | 175 / 176 (1 skipped) | 0 | ✅ Pass (0 failures) |
+| Backend | Pytest (Full 17-module suite including `test_phase2b_workflow_safety`, `test_phase2a_image_classifier`, `test_phase1d_concurrency`) | 199 / 199 (0 skipped) | 0 | ✅ Pass (100% passing) |
 | Frontend | Vitest integration (`App.test.jsx`) | 11 / 11 | 0 | ✅ Pass (0 failures) |
 | Frontend | Linter (`npm --prefix frontend run lint`) | 0 errors, 0 warnings | 0 | ✅ Pass (100% clean) |
 | Frontend | Build (`npm --prefix frontend run build`) | Vite bundle | 0 | ✅ Pass |
@@ -133,8 +144,7 @@
 
 | Phase | Focus Areas | Findings |
 |---|---|---|
-| Phase 2B | Workflow cycle termination, LangGraph attempt limits | A05 |
 | Phase 2C | Lazy model loading lifecycle, Dockerfile alignment, run.py cleanup | A09, A12, A14 |
-| Phase 3 | Dependency hygiene, requirements alignment, clinical AI disclaimers | A13, A17 |
+| Phase 3 | Dependency hygiene, requirements alignment, clinical AI disclaimers | A13 |
 | Phase 4 | End-to-end multi-user verification gates | All gates |
 | Phase 5 | Hugging Face Spaces deployment & validation | Production |

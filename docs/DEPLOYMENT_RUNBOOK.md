@@ -1,6 +1,6 @@
 # NewGenHealthAI — Deployment Runbook
 
-> **Status**: Phase 1C.1 (Authentication Hardening and Database Migration Risks Remediation).
+> **Status**: Phase 2B (Bounded Clinical Workflow and Medical-Response Safety).
 > Runbook is authoritative for the Docker + Hugging Face Spaces deployment path.
 
 ## Architecture
@@ -137,6 +137,33 @@ npm --prefix frontend run dev
 
 ---
 
+## Clinical Intelligence & Emergency Safety Safeguards (A05, A17)
+
+1. **Deterministic Urgent-Risk Emergency Gate**:
+   - Executes in pure offline Python regex and keyword heuristics before ordinary intake and tool fallback.
+   - 100% available even if Groq LLM, ChromaDB, Wikipedia, and Tavily are completely offline.
+   - Evaluates for cardiac (crushing chest pain / radiation), stroke (FAST criteria), severe respiratory distress, anaphylaxis, uncontrolled hemorrhage, and crisis/self-harm.
+   - Bypasses triage questioning and immediately returns 911 / 999 / 112 / ED escalation instructions with clear clinical limitation disclaimers.
+
+2. **Bounded DAG Routing & Cycle Termination (A05)**:
+   - Bounded provider visit budgets: `attempted_providers` tracks visited nodes; each provider is visited at most once per turn.
+   - Linear fallback progression: `retriever` -> `llm_agent` -> `wikipedia` -> `tavily` -> `executor`.
+   - Eliminates circular looping between `llm_agent` and `retriever`.
+   - Exhaustion handling: when all candidate providers fail or are unavailable, terminates cleanly at `executor` with `source="Service Unavailable"` and `is_failed_generation=True`.
+
+3. **Physician Impersonation & Prescription Prohibition (A17)**:
+   - System persona de-escalated across `triage_agent.py`, `llm_agent.py`, and `executor.py` to an automated medical education and informational assistant.
+   - Strictly forbids claiming physician status, doctor-led examinations, or definitive diagnostic conclusions.
+   - Explicitly prohibits patient-specific prescription recommendations or medication dosage schedules.
+   - Triage round 3 transitions to an educational summary with explicit diagnostic uncertainties instead of forcing a diagnosis.
+
+4. **Provenance & Persistence Integrity**:
+   - Retrieved document content is sanitized against prompt injections.
+   - Citations only formatted when verified provenance metadata (title, URL) is present in retrieved chunks.
+   - Failed or service-unavailable responses are flagged with `success=False` and excluded from SQLite database persistence and conversation rehydration.
+
+---
+
 ## Pre-deployment Verification Gates
 
 - [x] Auth isolation: cross-user session access blocked (A01/A02 verified with 35 backend tests)
@@ -158,7 +185,13 @@ npm --prefix frontend run dev
 - [x] X-ray anatomy classes identified as anatomy without fabricating fractures or abnormalities (A03 / Phase 2A)
 - [x] Dataset artifacts filtered; top artifact yields `status="inconclusive"` without disease promotion (A03 / Phase 2A)
 - [x] False confidence calibration removed; uncalibrated scores with prototype disclaimers displayed (A04 / Phase 2A)
-- [x] Complete backend test suite inventory verified (175 passed, 1 skipped)
+- [x] Bounded LangGraph fallback routing with single-visit provider budgets verified (A05 / Phase 2B)
+- [x] Infinite routing cycle between retriever and LLM terminated (A05 / Phase 2B)
+- [x] Pure offline emergency gate active for cardiac, stroke, dyspnea, anaphylaxis, bleeding, and crisis (Phase 2B)
+- [x] Physician impersonation, doctor claims, and clinical exam assertions eliminated (A17 / Phase 2B)
+- [x] Forced diagnoses after round 3 and prescription dosage recommendations eliminated (A17 / Phase 2B)
+- [x] Failed generations cleanly handled with service-unavailable response and non-persistence in DB (Phase 2B)
+- [x] Complete backend test suite inventory verified (199 passed, 0 skipped, 0 failed)
 - [x] Frontend build clean with lint passing (0 errors, 0 warnings, 11/11 tests pass)
 - [ ] HF Space running status verified with live credentials (post-deployment)
 

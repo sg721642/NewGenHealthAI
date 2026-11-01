@@ -161,6 +161,8 @@ class ClinicalEngine:
                     "Unable to generate response" in content
                     or "Sorry, I encountered an error" in content
                     or "Connection error" in content
+                    or "temporarily unavailable" in content.lower()
+                    or "service is currently unable" in content.lower()
                 ):
                     continue
                 valid_history.append({"role": role, "content": content})
@@ -187,6 +189,10 @@ class ClinicalEngine:
             raise ValueError("user_id is strictly required for clinical processing")
         if not session_id:
             raise ValueError("session_id is strictly required for clinical processing")
+        if not message or not message.strip():
+            raise ValueError("Message cannot be empty or whitespace only")
+        if len(message) > 4000:
+            raise ValueError("Message exceeds maximum permitted length of 4000 characters")
 
         memory_key = self._get_memory_key(user_id, session_id)
 
@@ -216,17 +222,25 @@ class ClinicalEngine:
             # 4. Retrieve or rehydrate conversation state from prior turns
             state = self._get_or_restore_state(session_id, user_id)
             state = reset_query_state(state)
-            state["question"] = message
+            state["question"] = message.strip()
 
             # 5. Persist user message under confirmed user ownership
-            db_service.save_message(session_id, "user", message, user_id=user_id)
+            db_service.save_message(session_id, "user", message.strip(), user_id=user_id)
 
             # 6. Run workflow
             try:
-                result = await self.workflow_app.ainvoke(state)
-            except AttributeError:
-                logger.warning("Falling back to sync invoke")
-                result = self.workflow_app.invoke(state)
+                try:
+                    if hasattr(self.workflow_app, "ainvoke"):
+                        raw_res = self.workflow_app.ainvoke(state)
+                        if hasattr(raw_res, "__await__"):
+                            result = await raw_res
+                        else:
+                            result = raw_res
+                    else:
+                        result = self.workflow_app.invoke(state)
+                except AttributeError:
+                    logger.warning("Falling back to sync invoke")
+                    result = self.workflow_app.invoke(state)
             except Exception as e:
                 logger.error("Clinical workflow execution error: %s", e)
                 # Never fabricate a successful medical response on failure
@@ -253,17 +267,31 @@ class ClinicalEngine:
             # 8. Update in-memory state
             self.conversation_states[memory_key].update(result)
 
-            response_text = result.get("generation", "Unable to generate response.")
+            is_failed = bool(
+                result.get("is_failed_generation")
+                or result.get("source") == "Service Unavailable"
+                or not result.get("generation")
+            )
+            response_text = result.get(
+                "generation",
+                "Our health information service is temporarily unavailable. If you are experiencing concerning symptoms, please contact your healthcare provider or local clinic directly.",
+            )
             source = result.get("source", "Unknown")
 
-            # Persist assistant response tagged with owner
-            db_service.save_message(session_id, "assistant", response_text, source, user_id=user_id)
+            if not is_failed:
+                # Persist assistant response tagged with owner only on genuine success
+                db_service.save_message(session_id, "assistant", response_text, source, user_id=user_id)
+                success = True
+            else:
+                # Do NOT persist service-unavailable or failed responses as valid clinical turns
+                logger.warning("ClinicalEngine: Generation flagged as failed/unavailable; skipping database persistence")
+                success = False
 
             response_dict = {
                 "response": response_text,
                 "source": source,
                 "timestamp": datetime.now().strftime("%I:%M %p"),
-                "success": bool(result.get("generation")),
+                "success": success,
             }
 
             follow_up_data = result.get("follow_up_data")

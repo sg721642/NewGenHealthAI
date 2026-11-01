@@ -8,6 +8,7 @@ in the triage flow instead of being treated as a new query.
 """
 
 from app.core.state import AgentState
+from app.core.urgent_care import check_urgent_risk
 
 # ── Medical Keywords ───────────────────────────────────────────────────────────
 MEDICAL_KEYWORDS = [
@@ -43,8 +44,24 @@ MEDICAL_KEYWORDS = [
 
 
 def PlannerAgent(state: AgentState) -> AgentState:
-    """Decide whether to use RAG retriever or direct LLM based on question content."""
-    question = state["question"].lower()
+    """Decide whether to route to urgent escalation, RAG retriever, or direct LLM."""
+    raw_question = state.get("question", "")
+
+    # 1. First-priority check: acute emergency red flags
+    urgent_result = check_urgent_risk(raw_question)
+    if urgent_result and urgent_result.get("is_urgent"):
+        state["is_urgent"] = True
+        state["urgent_category"] = urgent_result["category"]
+        state["urgent_advisory"] = urgent_result["advisory"]
+        state["generation"] = urgent_result["advisory"]
+        state["source"] = "Urgent Medical Alert"
+        state["triage_status"] = "urgent_risk"
+        state["current_tool"] = "executor"
+        state["is_medical_query"] = True
+        state["retry_count"] = 0
+        return state
+
+    question = raw_question.lower()
     triage_round = state.get("triage_round", 0)
 
     # If we're already in a triage session, this is a follow-up answer

@@ -36,33 +36,61 @@ def _get_triage_llm():
 
 
 def _extract_json(text: str) -> Optional[Dict]:
-    """Try to pull a JSON object out of LLM freeform text."""
+    """Try to pull a JSON object out of LLM freeform text with error resilience."""
+    if not text or not text.strip():
+        return None
+
+    cleaned_text = text.strip()
+
+    # 1. Direct parse attempt
     try:
-        return json.loads(text)
+        return json.loads(cleaned_text)
     except (json.JSONDecodeError, TypeError):
         pass
-    m = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
+
+    # 2. Markdown fenced block
+    m = re.search(r"```(?:json)?\s*([\s\S]*?)```", cleaned_text)
     if m:
+        block = m.group(1).strip()
         try:
-            return json.loads(m.group(1).strip())
+            return json.loads(block)
         except json.JSONDecodeError:
-            pass
-    m = re.search(r"\{[\s\S]*\}", text)
+            # Try removing trailing commas
+            block_fixed = re.sub(r",\s*([}\]])", r"\1", block)
+            try:
+                return json.loads(block_fixed)
+            except json.JSONDecodeError:
+                pass
+
+    # 3. Outer braces extraction
+    m = re.search(r"\{[\s\S]*\}", cleaned_text)
     if m:
+        candidate = m.group(0)
         try:
-            return json.loads(m.group(0))
+            return json.loads(candidate)
         except json.JSONDecodeError:
-            pass
+            candidate_fixed = re.sub(r",\s*([}\]])", r"\1", candidate)
+            try:
+                return json.loads(candidate_fixed)
+            except json.JSONDecodeError:
+                pass
+
     return None
 
 
 def TriageAgent(state: AgentState) -> AgentState:
     """
-    Clinical triage: ask ONE dynamic follow-up question per round, then diagnose.
-    Non-medical queries pass through transparently.
+    Automated symptom intake clarification: asks ONE clarification question per round
+    (up to MAX_TRIAGE_ROUNDS) to gather context for healthcare discussions.
+    Emergency situations bypass triage immediately. Non-medical queries pass through.
     """
+    # 0. Urgent risk bypass: never trap acute emergencies in symptom triage
+    if state.get("is_urgent"):
+        state["triage_status"] = "urgent_risk"
+        logger.info("Triage: acute emergency flagged — bypassing symptom interview")
+        return state
 
-    if not state.get("is_medical_query", False):
+    if not state.get("is_medical_query", False) and state.get("triage_round", 0) == 0:
         state["triage_status"] = "ready_to_diagnose"
         logger.info("Triage: non-medical query — skipping")
         return state
@@ -72,19 +100,21 @@ def TriageAgent(state: AgentState) -> AgentState:
         state["triage_status"] = "ready_to_diagnose"
         return state
 
-    question = state["question"]
+    raw_question = state.get("question", "")
+    question = raw_question.strip() if isinstance(raw_question, str) else ""
+
     triage_round = state.get("triage_round", 0)
     collected = list(state.get("collected_symptoms", []))
     questions_asked = list(state.get("questions_asked", []))
 
-    # Append current patient message to collected symptoms
-    if question.strip():
-        collected.append(question.strip())
+    # Append current message to collected symptoms if non-empty
+    if question:
+        collected.append(question)
         state["collected_symptoms"] = collected
 
-    # Force diagnosis after MAX rounds
+    # Transition to assessment after MAX rounds without forced diagnosis
     if triage_round >= MAX_TRIAGE_ROUNDS:
-        logger.info("Triage: max rounds reached — forcing diagnosis")
+        logger.info("Triage: max rounds reached (%d) — transitioning to educational assessment", MAX_TRIAGE_ROUNDS)
         state["triage_status"] = "ready_to_diagnose"
         state["question"] = _build_enriched_question(collected)
         return state
@@ -92,14 +122,14 @@ def TriageAgent(state: AgentState) -> AgentState:
     # Build conversation recap (last 10 turns)
     history_lines = []
     for item in state.get("conversation_history", [])[-10:]:
-        role = "Patient" if item.get("role") == "user" else "Doctor"
+        role = "User" if item.get("role") == "user" else "Assistant"
         history_lines.append(f"{role}: {item.get('content', '')}")
     history_text = "\n".join(history_lines) if history_lines else "(first message)"
 
     # Collected symptoms so far
     collected_text = "\n".join(f"- {s}" for s in collected) if collected else "(none yet)"
 
-    # CRITICAL: Build explicit list of questions already asked
+    # Build explicit list of questions already asked
     if questions_asked:
         asked_block = (
             "QUESTIONS YOU HAVE ALREADY ASKED (DO NOT ASK THESE AGAIN OR ANYTHING SIMILAR):\n"
@@ -111,31 +141,30 @@ def TriageAgent(state: AgentState) -> AgentState:
     # Round-specific instruction
     if triage_round < MAX_TRIAGE_ROUNDS - 1:
         round_instruction = (
-            f"This is clinical intake round {triage_round + 1} of {MAX_TRIAGE_ROUNDS}. "
-            "Review everything the patient said and ALL questions already asked. "
-            "Identify the single most clinically valuable piece of information that is STILL MISSING. "
-            "This could be: exact location of pain, character/quality (throbbing/sharp/dull), "
-            "radiation/spread, associated symptoms, aggravating/relieving factors, "
-            "relevant past history, medications taken, or anything uniquely relevant to THEIR complaint. "
-            "Ask EXACTLY ONE highly specific, patient-tailored question that has NOT been asked before. "
-            "Do NOT follow a rigid sequence — let the patient's unique complaint guide you."
+            f"This is intake clarification round {triage_round + 1} of {MAX_TRIAGE_ROUNDS}. "
+            "Review everything the user said and ALL questions already asked. "
+            "Identify the single most clinically relevant piece of information that is STILL MISSING. "
+            "This could be: location, onset/duration, character, severity, associated symptoms, "
+            "or aggravating/relieving factors. "
+            "Ask EXACTLY ONE clear, concise question that has NOT been asked before."
         )
     else:
         round_instruction = (
-            f"This is the FINAL intake round (round {MAX_TRIAGE_ROUNDS}). "
-            "If there is still ONE critical piece of information missing for a complete clinical picture, "
-            "ask it (set status='needs_info'). "
-            "If you now have sufficient detail, set status='ready_to_diagnose' to proceed."
+            f"This is the FINAL clarification round (round {MAX_TRIAGE_ROUNDS}). "
+            "If there is still ONE important piece of symptom context missing, ask it (set status='needs_info'). "
+            "If you now have enough context to summarize for discussion with a doctor, set status='ready_to_diagnose'."
         )
 
-    triage_prompt = f"""You are NewGenHealthAI, a senior clinical physician conducting a patient intake interview.
+    triage_prompt = f"""You are NewGenHealthAI, an automated medical education intake assistant.
+You are NOT a doctor or physician, and do NOT diagnose patients. Your goal is to gather symptom clarity
+to help the user prepare for a consultation with a healthcare professional.
 
-PATIENT'S CURRENT MESSAGE: "{question}"
+USER'S CURRENT MESSAGE: "{question}"
 
 CONVERSATION SO FAR:
 {history_text}
 
-ALL INFORMATION COLLECTED FROM PATIENT:
+ALL INFORMATION COLLECTED:
 {collected_text}
 
 {asked_block}
@@ -145,28 +174,29 @@ ROUND: {triage_round + 1} of {MAX_TRIAGE_ROUNDS}
 ROUND-SPECIFIC INSTRUCTION:
 {round_instruction}
 
-STRICT RULES:
-1. Ask EXACTLY ONE question — never multiple questions in one message.
-2. The question MUST be different from every question in "QUESTIONS ALREADY ASKED". Asking a similar or rephrased version of an already-asked question is FORBIDDEN.
-3. Tailor your question specifically to the patient's complaint (e.g. headache → ask about location/type/aura; chest pain → ask about radiation/breathlessness; rash → ask about appearance/spread/itch).
-4. Provide 3-5 SHORT answer options (2-6 words each), specific and clinically meaningful.
-5. In `doctor_response`, write a warm, empathetic 1-2 sentence acknowledgment of what the patient just said. Do NOT include the follow-up question in this field.
-6. Output ONLY valid JSON — no other text before or after.
+STRICT SAFETY & STYLE RULES:
+1. Ask EXACTLY ONE question — never multiple questions.
+2. The question MUST be different from every question in "QUESTIONS ALREADY ASKED".
+3. Never claim or imply you are a physician, doctor, or that you are diagnosing a disease.
+4. Do NOT recommend prescription drugs, medication dosages, or treatment schedules.
+5. Provide 3-5 short, helpful option chips (2-6 words each).
+6. In `acknowledgment`, write a polite, empathetic 1-2 sentence acknowledgment of what the user reported. Do NOT put the follow-up question in this field.
+7. Output ONLY valid JSON — no markdown or surrounding commentary.
 
 OUTPUT FORMAT (choose one):
 
-If more info needed:
+If more clarification needed:
 {{
   "status": "needs_info",
-  "doctor_response": "Warm empathetic acknowledgment of what patient just shared (1-2 sentences, no question here).",
-  "question_text": "Your single, highly specific follow-up question.",
+  "acknowledgment": "Empathetic acknowledgment of what the user shared (1-2 sentences).",
+  "question_text": "Your single clarification question.",
   "options": ["Option A", "Option B", "Option C", "Option D"]
 }}
 
-If enough information for diagnosis:
+If enough information gathered:
 {{
   "status": "ready_to_diagnose",
-  "doctor_response": "",
+  "acknowledgment": "",
   "question_text": "",
   "options": []
 }}"""
@@ -182,7 +212,7 @@ If enough information for diagnosis:
         parsed = _extract_json(answer)
 
         if not parsed:
-            logger.warning("Triage: couldn't parse JSON — defaulting to ready")
+            logger.warning("Triage: couldn't parse JSON — defaulting to ready_to_diagnose")
             state["triage_status"] = "ready_to_diagnose"
             state["question"] = _build_enriched_question(collected)
             return state
@@ -190,20 +220,20 @@ If enough information for diagnosis:
         status = parsed.get("status", "ready_to_diagnose")
         question_text = parsed.get("question_text", "").strip()
         options = parsed.get("options", [])
-        doctor_response = parsed.get("doctor_response", "").strip()
+        acknowledgment = (parsed.get("acknowledgment") or parsed.get("doctor_response") or "").strip()
 
         if status == "needs_info" and question_text:
             state["triage_status"] = "needs_info"
             state["triage_round"] = triage_round + 1
 
-            # Record this question so it won't be repeated
+            # Record question to prevent repetition
             questions_asked.append(question_text)
             state["questions_asked"] = questions_asked
 
-            if doctor_response:
-                state["generation"] = f"{doctor_response}\n\n**{question_text}**"
+            if acknowledgment:
+                state["generation"] = f"{acknowledgment}\n\n**{question_text}**"
             else:
-                state["generation"] = f"Thank you for sharing that.\n\n**{question_text}**"
+                state["generation"] = f"Thank you for sharing that information.\n\n**{question_text}**"
             state["source"] = "Clinical Triage"
 
             state["follow_up_data"] = {
@@ -217,16 +247,12 @@ If enough information for diagnosis:
                 "max_rounds": MAX_TRIAGE_ROUNDS,
             }
 
-            logger.info(
-                "Triage: round %d — asking: '%s'",
-                triage_round + 1,
-                question_text[:80],
-            )
+            logger.info("Triage: round %d — asking: '%s'", triage_round + 1, question_text[:80])
 
         else:
             state["triage_status"] = "ready_to_diagnose"
             state["question"] = _build_enriched_question(collected)
-            logger.info("Triage: sufficient info — proceeding to diagnosis")
+            logger.info("Triage: sufficient symptom details — proceeding to educational assessment")
 
     except Exception as e:
         logger.error("Triage: LLM call failed: %s", str(e))
@@ -237,20 +263,20 @@ If enough information for diagnosis:
 
 
 def _build_enriched_question(collected: List[str]) -> str:
-    """Combine all collected patient statements into a single enriched query."""
+    """Combine all collected symptom statements into an enriched educational query."""
     if not collected:
         return ""
     if len(collected) == 1:
         return collected[0]
 
     parts = [
-        "The patient reported the following during clinical intake:",
+        "The user reported the following symptoms during intake clarification:",
     ]
     for i, symptom in enumerate(collected, 1):
         parts.append(f"  {i}. {symptom}")
     parts.append(
-        "\nBased on ALL the information above, provide a comprehensive medical assessment "
-        "including: possible diagnoses (differential diagnosis), recommended treatments, "
-        "home remedies, when to seek urgent care, and preventive measures."
+        "\nBased on ALL the information above, provide an educational assessment "
+        "highlighting possible conditions to discuss with a healthcare professional, acknowledging uncertainties, "
+        "supportive self-care, and when to seek urgent or in-person medical care."
     )
     return "\n".join(parts)

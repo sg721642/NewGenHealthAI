@@ -24,42 +24,79 @@ from app.core.state import AgentState
 
 # ── Routing Functions ──────────────────────────────────────────────────────────
 def _route_after_planner(state: AgentState) -> str:
-    """After planner, always go to triage for clinical interview."""
+    """After planner, immediately route urgent red flags to executor, else triage."""
+    if state.get("is_urgent"):
+        return "executor"
     return "triage_agent"
 
 
 def _route_after_triage(state: AgentState) -> str:
-    """After triage, either ask follow-up questions or proceed to diagnosis."""
-    if state.get("triage_status") == "needs_info":
-        # Follow-up questions are the response — go to executor to finalize
+    """After triage, either ask follow-up questions, handle urgent alert, or proceed to educational assessment."""
+    if state.get("is_urgent") or state.get("triage_status") in ("needs_info", "urgent_risk"):
+        # Follow-up questions or emergency advisory are finalized at executor
         return "executor"
-    # Ready to diagnose — use the planner's original routing
+    # Ready for educational assessment — use primary tool selected by planner
     return "retriever" if state.get("current_tool") == "retriever" else "llm_agent"
 
 
 def _route_after_llm(state: AgentState) -> str:
-    return "executor" if state.get("llm_success") else "retriever"
+    """Bounded routing after direct LLM: success -> executor; failure -> retriever -> wiki -> tavily -> executor."""
+    if state.get("llm_success"):
+        return "executor"
+    attempted = state.get("attempted_providers", [])
+    if "retriever" not in attempted and not state.get("rag_attempted"):
+        return "retriever"
+    if "wikipedia" not in attempted and not state.get("wiki_attempted"):
+        return "wikipedia"
+    if "tavily" not in attempted and not state.get("tavily_attempted"):
+        return "tavily"
+    return "executor"
 
 
 def _route_after_rag(state: AgentState) -> str:
-    return "executor" if state.get("rag_success") else "llm_agent"
+    """Bounded routing after RAG: success -> executor; failure -> llm_agent -> wiki -> tavily -> executor."""
+    if state.get("rag_success"):
+        return "executor"
+    attempted = state.get("attempted_providers", [])
+    if "llm_agent" not in attempted and not state.get("llm_attempted"):
+        return "llm_agent"
+    if "wikipedia" not in attempted and not state.get("wiki_attempted"):
+        return "wikipedia"
+    if "tavily" not in attempted and not state.get("tavily_attempted"):
+        return "tavily"
+    return "executor"
 
 
 def _route_after_llm_fallback(state: AgentState) -> str:
-    return "executor" if state.get("llm_success") else "wikipedia"
+    """Fallback route after secondary LLM attempt."""
+    if state.get("llm_success"):
+        return "executor"
+    attempted = state.get("attempted_providers", [])
+    if "wikipedia" not in attempted and not state.get("wiki_attempted"):
+        return "wikipedia"
+    if "tavily" not in attempted and not state.get("tavily_attempted"):
+        return "tavily"
+    return "executor"
 
 
 def _route_after_wiki(state: AgentState) -> str:
-    return "executor" if state.get("wiki_success") else "tavily"
+    """Bounded routing after Wikipedia: success -> executor; failure -> tavily -> executor."""
+    if state.get("wiki_success"):
+        return "executor"
+    attempted = state.get("attempted_providers", [])
+    if "tavily" not in attempted and not state.get("tavily_attempted"):
+        return "tavily"
+    return "executor"
 
 
 def _route_after_tavily(state: AgentState) -> str:
+    """Terminal routing after Tavily web search."""
     return "executor"
 
 
 # ── Workflow Factory ───────────────────────────────────────────────────────────
 def create_workflow():
-    """Build and compile the LangGraph agentic workflow."""
+    """Build and compile the bounded LangGraph agentic workflow."""
     workflow = StateGraph(AgentState)
 
     # Register nodes
@@ -76,32 +113,43 @@ def create_workflow():
     # Entry point
     workflow.set_entry_point("memory")
 
-    # Edges:  memory → planner → triage → (follow-up OR diagnosis pipeline)
+    # Edges:  memory → planner
     workflow.add_edge("memory", "planner")
 
-    # Planner always routes to triage
+    # Planner routes urgent red flags to executor, normal queries to triage
     workflow.add_conditional_edges(
         "planner",
         _route_after_planner,
-        {"triage_agent": "triage_agent"},
+        {"executor": "executor", "triage_agent": "triage_agent"},
     )
 
-    # Triage decides: ask follow-up → executor, OR proceed to diagnosis
+    # Triage decides: ask follow-up / urgent alert → executor, OR proceed to assessment
     workflow.add_conditional_edges(
         "triage_agent",
         _route_after_triage,
         {"executor": "executor", "retriever": "retriever", "llm_agent": "llm_agent"},
     )
 
+    # Bounded fallback edges: each provider visited at most once per turn
     workflow.add_conditional_edges(
         "llm_agent",
         _route_after_llm,
-        {"executor": "executor", "retriever": "retriever"},
+        {
+            "executor": "executor",
+            "retriever": "retriever",
+            "wikipedia": "wikipedia",
+            "tavily": "tavily",
+        },
     )
     workflow.add_conditional_edges(
         "retriever",
         _route_after_rag,
-        {"executor": "executor", "llm_agent": "llm_agent"},
+        {
+            "executor": "executor",
+            "llm_agent": "llm_agent",
+            "wikipedia": "wikipedia",
+            "tavily": "tavily",
+        },
     )
     workflow.add_conditional_edges(
         "wikipedia",
@@ -109,7 +157,9 @@ def create_workflow():
         {"executor": "executor", "tavily": "tavily"},
     )
     workflow.add_conditional_edges(
-        "tavily", _route_after_tavily, {"executor": "executor"}
+        "tavily",
+        _route_after_tavily,
+        {"executor": "executor"},
     )
     workflow.add_edge("executor", END)
 
