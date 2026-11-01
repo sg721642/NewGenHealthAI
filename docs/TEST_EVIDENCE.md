@@ -313,21 +313,21 @@ Test Inventory by Module:
 Phase 1D Specific Test Details (`test_phase1d_concurrency.py`):
 | Test Name | Concurrency, Memory & Lifecycle Scenario Verified | Outcome |
 |---|---|---|
-| `test_concurrent_turns_same_session_serialized` | 2 concurrent turns on the same conversation serialize via `ConversationLockManager` without interleaving | ✅ Pass |
-| `test_concurrent_turns_different_sessions_parallel` | Concurrent turns across distinct conversations execute in parallel without mutual blocking | ✅ Pass |
-| `test_client_disconnect_cancels_turn_cleanly` | Cancellation (`asyncio.CancelledError`) frees lock context immediately with zero lock leaks | ✅ Pass |
-| `test_provider_exception_releases_lock` | LLM provider exceptions release the conversation lock cleanly; subsequent requests succeed | ✅ Pass |
-| `test_clear_during_active_generation_returns_409` | Generational versioning detects clear during active generation; returns HTTP 409 Conflict | ✅ Pass |
-| `test_delete_during_active_generation_returns_409` | Deletion tombstoning detects delete during active generation; returns HTTP 409 Conflict | ✅ Pass |
-| `test_cleared_session_does_not_resurrect_stale_assistant_turn` | In-flight assistant generation discarded on cleared session; conversation memory not resurrected | ✅ Pass |
-| `test_deleted_session_does_not_resurrect_stale_assistant_turn` | In-flight assistant generation discarded on deleted session; memory state tombstoned | ✅ Pass |
+| `test_two_simultaneous_turns_in_one_conversation` | 2 concurrent turns on the same conversation serialize via `ConversationLockManager` without interleaving | ✅ Pass |
+| `test_concurrent_turns_in_different_conversations` | Concurrent turns across distinct conversations execute in parallel without mutual blocking | ✅ Pass |
+| `test_clear_during_in_flight_processing` | Generational versioning detects clear during active generation; returns HTTP 409 Conflict | ✅ Pass |
+| `test_delete_during_in_flight_processing` | Deletion tombstoning detects delete during active generation; returns HTTP 409 Conflict | ✅ Pass |
+| `test_request_cancellation_and_lock_release` | Cancellation (`asyncio.CancelledError`) frees lock context immediately with zero lock leaks | ✅ Pass |
+| `test_provider_exception_while_holding_lock` | LLM provider exceptions release the conversation lock cleanly; subsequent requests succeed | ✅ Pass |
 | `test_history_reconstruction_after_simulated_restart` | `_get_or_restore_state` accurately rehydrates memory turns from SQLite history on cold start | ✅ Pass |
+| `test_context_reconstruction_after_cache_eviction` | When `conversation_states` exceeds 500 sessions, evicted state is seamlessly restored from DB | ✅ Pass |
+| `test_conversation_ownership_during_history_hydration` | History rehydration verifies user ownership before loading records; prevents unauthorized cross-tenant loads | ✅ Pass |
 | `test_long_conversation_history_bounded` | History reconstruction bounded to `MAX_RESTORE_TURNS=20` most recent turns | ✅ Pass |
-| `test_failed_generation_excluded_from_history` | Assistant failure responses (`"Unable to generate response"`) excluded from restored memory context | ✅ Pass |
-| `test_conversation_eviction_from_lru_cache` | When `conversation_states` exceeds 500 sessions, evicted state is seamlessly restored from DB | ✅ Pass |
-| `test_account_switch_no_cross_contamination` | Multi-user isolation in locks, versions, and memory states prevents cross-tenant data leakage | ✅ Pass |
-| `test_bounded_rate_limiter_does_not_evict_active_lockouts` | Flooding rate limiter with dummy keys prunes expired entries first and preserves active lockouts | ✅ Pass |
+| `test_rate_limit_capacity_flooding_without_active_lockout_eviction` | Flooding rate limiter with dummy keys prunes expired entries first and preserves active lockouts | ✅ Pass |
 | `test_stepwise_schema_migration_recovery` | Schema migrations v1 and v2 execute as independent atomic transactions; safe resumption verified | ✅ Pass |
+| `test_deleted_id_resurrection_attempts_fail_closed` | In-flight assistant generation discarded on deleted session; memory state tombstoned | ✅ Pass |
+| `test_account_switching_isolation` | Multi-user isolation in locks, versions, and memory states prevents cross-tenant data leakage | ✅ Pass |
+| `test_failed_generation_excluded_from_history` | Assistant failure responses (`"Unable to generate response"`) excluded from restored memory context | ✅ Pass |
 
 ---
 
