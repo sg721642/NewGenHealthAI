@@ -9,6 +9,8 @@ export default function MessageComposer({
   onImageUpload,
   fileInputRef,
   currentSessionId,
+  selectedModality,
+  setSelectedModality,
 }) {
   const [voiceState, setVoiceState] = useState('idle'); // 'idle' | 'recording' | 'transcribing'
   const [recordingTime, setRecordingTime] = useState(0);
@@ -308,6 +310,32 @@ export default function MessageComposer({
               onChange={onImageUpload}
             />
           </label>
+
+          {/* Modality Dropdown */}
+          <select
+            className="composer-modality-select"
+            value={selectedModality || 'auto'}
+            onChange={(e) => setSelectedModality && setSelectedModality(e.target.value)}
+            title="Select target medical imaging modality or let AI detect"
+            aria-label="Select medical image modality"
+            style={{
+              fontSize: '0.72rem',
+              padding: '2px 4px',
+              borderRadius: '6px',
+              border: '1px solid var(--border-color, #cbd5e1)',
+              background: 'transparent',
+              color: 'var(--text-secondary, #64748b)',
+              cursor: 'pointer',
+              outline: 'none',
+              marginLeft: '2px',
+              marginRight: '4px',
+            }}
+          >
+            <option value="auto">Modality: Auto</option>
+            <option value="skin">Skin</option>
+            <option value="xray">X-ray</option>
+            <option value="retina">Retina</option>
+          </select>
 
           {/* Textarea */}
           <textarea

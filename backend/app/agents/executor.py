@@ -11,6 +11,21 @@ PROMPT_INJECTION_PATTERN = re.compile(
 )
 
 
+def sanitize_emergency_numbers(text: str) -> str:
+    """Ensure India emergency numbers (112 / 108) are prioritized and rogue 911 mentions without locale are clarified."""
+    if not text:
+        return ""
+    # If text says 'call 911' or 'dial 911' without mentioning 112 or 108:
+    if re.search(r"\b(?:call|dial)\s+911\b", text, re.IGNORECASE) and not re.search(r"\b112\b", text):
+        text = re.sub(
+            r"\b(?:call|dial)\s+911\b",
+            "call 112 / 108 in India (or 911 in the US/Canada)",
+            text,
+            flags=re.IGNORECASE,
+        )
+    return text
+
+
 def _sanitize_text(text: str) -> str:
     """Sanitize retrieved text before inserting into LLM prompt templates."""
     if not text:
@@ -173,28 +188,29 @@ def ExecutorAgent(state: AgentState) -> AgentState:
             f"REPORTED SYMPTOMS SUMMARY:\n{collected_text}\n\n"
             f"Conversation History:\n{history_context}\n"
             f"{doc_section}\n\n"
-            "Provide a well-structured educational summary to help the user prepare for an in-person discussion "
-            "with a licensed healthcare professional. Strictly adhere to these clinical safety constraints:\n"
+            "Provide a concise, practical educational summary (approximately 150–350 words total) to help the user prepare "
+            "for an in-person discussion with a licensed healthcare professional. Strictly adhere to these clinical safety constraints:\n"
             "1. NEVER claim to be a physician, doctor, or that a clinical diagnosis has been made.\n"
             "2. DO NOT state definitive diagnostic conclusions. Present differential considerations with explicit diagnostic uncertainty.\n"
             "3. DO NOT recommend specific prescription drugs, medication dosages, or treatment schedules.\n"
-            "4. Structure your response with these exact markdown headers:\n\n"
+            "4. Keep explanations brief, high-yield, and focused. Do NOT write lengthy multi-page essays.\n"
+            "5. Structure your response with these exact markdown headers:\n\n"
             "## 📋 Health Summary & Overview\n"
-            "Objective summary of symptoms reported by the user.\n\n"
+            "Brief objective summary (1-2 sentences) of symptoms reported by the user.\n\n"
             "## 🔍 Educational Possibilities & Discussion Points\n"
-            "Potential health conditions to discuss with a doctor, noting why they are relevant and acknowledging diagnostic limitations.\n\n"
+            "2-3 potential health conditions to discuss with a doctor, noting diagnostic limitations.\n\n"
             "## 💡 Supportive Self-Care & General Measures\n"
-            "Practical, non-pharmacological comfort measures and lifestyle adjustments.\n\n"
+            "Concise, practical non-pharmacological comfort measures (3-4 bullet points).\n\n"
             "## ⚠️ Red Flags & Warning Signs\n"
-            "Key symptoms requiring immediate emergency medical attention.\n\n"
+            "Key symptoms requiring immediate emergency medical care (call 112 / 108 in India).\n\n"
             "## 🩺 Guidance for Healthcare Provider Consultation\n"
-            "Specific questions and observations the user should take to their doctor.\n\n"
+            "Specific questions the user should take to their doctor.\n\n"
             "> **Medical Disclaimer:** This summary is for educational and informational purposes only and does not substitute "
             "for professional medical advice, clinical diagnosis, or individualized treatment."
         )
 
         try:
-            response = _invoke_llm_safe(llm, prompt, temperature=0.3, max_tokens=2048)
+            response = _invoke_llm_safe(llm, prompt, temperature=0.3, max_tokens=1000)
             answer = ""
             if response is not None:
                 answer = (
@@ -288,6 +304,7 @@ def ExecutorAgent(state: AgentState) -> AgentState:
         )
         return state
 
+    answer = sanitize_emergency_numbers(answer)
     state["generation"] = answer
     state["source"] = source_info
     state["is_failed_generation"] = False

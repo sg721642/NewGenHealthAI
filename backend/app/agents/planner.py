@@ -9,7 +9,7 @@ in the triage flow instead of being treated as a new query.
 
 import re
 from app.core.state import AgentState
-from app.core.urgent_care import check_urgent_risk
+from app.core.urgent_care import check_urgent_risk, check_emergency_followup
 
 # ── Medical Keywords ───────────────────────────────────────────────────────────
 MEDICAL_KEYWORDS = [
@@ -54,7 +54,22 @@ def PlannerAgent(state: AgentState) -> AgentState:
     """Decide whether to route to urgent escalation, symptom triage, RAG retriever, or direct LLM."""
     raw_question = state.get("question", "")
 
-    # 1. First-priority check: acute emergency red flags
+    # 0. First check: active emergency follow-up context (e.g. user says "Delhi me" after emergency)
+    history = state.get("conversation_history") or []
+    emergency_followup = check_emergency_followup(raw_question, history)
+    if emergency_followup:
+        state["is_urgent"] = True
+        state["urgent_category"] = emergency_followup["category"]
+        state["urgent_advisory"] = emergency_followup["advisory"]
+        state["generation"] = emergency_followup["advisory"]
+        state["source"] = "Urgent Medical Alert"
+        state["triage_status"] = "urgent_risk"
+        state["current_tool"] = "executor"
+        state["is_medical_query"] = True
+        state["retry_count"] = 0
+        return state
+
+    # 1. Primary check: acute emergency red flags
     urgent_result = check_urgent_risk(raw_question)
     if urgent_result and urgent_result.get("is_urgent"):
         state["is_urgent"] = True

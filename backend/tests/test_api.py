@@ -136,3 +136,18 @@ def test_clear_conversation(test_client, auth_headers):
         assert "cleared" in response.json()["message"].lower()
 
 
+def test_delete_all_sessions(test_client, auth_headers):
+    headers, user = auth_headers
+    with patch.object(db_service, 'clear_all_user_sessions') as mock_clear_db, \
+         patch.object(chat_service.clinical_engine, 'clear_user_states') as mock_clear_states:
+        mock_clear_db.return_value = 3
+        response = test_client.delete("/api/v1/sessions", headers=headers)
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert data["deleted_count"] == 3
+        mock_clear_db.assert_called_once_with(user_id=user.id)
+        mock_clear_states.assert_called_once_with(user_id=user.id)
+
+
+

@@ -161,6 +161,76 @@ def _get_clip():
     return _clip_model, _clip_processor
 
 
+def detect_domain_from_visual_features(img: Image.Image) -> tuple:
+    """
+    High-speed deterministic visual domain detector based on color space analysis,
+    aperture ratios, and skin chrominance loci. Provides pure offline domain detection
+    (<10ms) without external network or heavy neural weights.
+    Returns: (domain_name: str, confidence: float, all_scores: dict)
+    """
+    try:
+        rgb = img.convert("RGB")
+        arr = np.asarray(rgb, dtype=np.float32)
+        h, w, _ = arr.shape
+
+        r = arr[:, :, 0]
+        g = arr[:, :, 1]
+        b = arr[:, :, 2]
+
+        # 1. Chroma / color saturation: |R-G| + |G-B| + |B-R|
+        chroma = np.abs(r - g) + np.abs(g - b) + np.abs(b - r)
+        mean_chroma = float(np.mean(chroma))
+
+        # 2. X-ray check: Grayscale / radiographic (very low chroma across whole image)
+        if mean_chroma < 14.0:
+            conf = min(0.95, 0.70 + (14.0 - mean_chroma) / 14.0 * 0.25)
+            return "xray", conf, {"xray": conf, "mean_chroma": mean_chroma}
+
+        # 3. Retinal Fundus check: circular dark aperture borders, reddish/orange center
+        corners = [
+            arr[:h // 8, :w // 8], arr[:h // 8, -w // 8:],
+            arr[-h // 8:, :w // 8], arr[-h // 8:, -w // 8:],
+        ]
+        corner_brightness = float(np.mean([np.mean(c) for c in corners]))
+        center = arr[h // 4:3 * h // 4, w // 4:3 * w // 4]
+        center_brightness = float(np.mean(center))
+        center_r_ratio = float(np.mean(center[:, :, 0]) / (np.mean(center[:, :, 1]) + np.mean(center[:, :, 2]) + 1e-5))
+
+        if corner_brightness < 30.0 and center_brightness > 45.0 and center_r_ratio > 0.65:
+            conf = 0.88
+            return "retina", conf, {"retina": conf, "corner_b": corner_brightness, "center_b": center_brightness}
+
+        # 4. Skin lesion check: Kovac skin color model
+        skin_mask = (
+            (r > 80) & (g > 35) & (b > 15) &
+            ((np.maximum(r, np.maximum(g, b)) - np.minimum(r, np.minimum(g, b))) > 15) &
+            (np.abs(r - g) > 12) & (r > g) & (r > b)
+        )
+        skin_ratio = float(np.mean(skin_mask))
+
+        # Nature / outdoor / non-medical checks:
+        green_mask = (g > r * 1.1) & (g > b * 1.1) & (g > 50)
+        green_ratio = float(np.mean(green_mask))
+
+        blue_mask = (b > r * 1.2) & (b > g * 1.1) & (b > 80)
+        blue_ratio = float(np.mean(blue_mask))
+
+        if green_ratio > 0.15 or blue_ratio > 0.20:
+            return "non_medical", 0.85, {"non_medical": 0.85, "green": green_ratio, "blue": blue_ratio}
+
+        if skin_ratio >= 0.35:
+            conf = min(0.95, 0.60 + skin_ratio * 0.35)
+            return "skin", conf, {"skin": conf, "skin_ratio": skin_ratio}
+
+        if skin_ratio < 0.15 and (green_ratio > 0.05 or blue_ratio > 0.05 or mean_chroma > 50.0):
+            return "non_medical", 0.80, {"non_medical": 0.80, "skin_ratio": skin_ratio}
+
+        return "general", 0.50, {"general": 0.50, "skin_ratio": skin_ratio}
+    except Exception as e:
+        logger.warning("Visual feature detection error: %s", type(e).__name__)
+        return "unknown", 0.0, {"error": str(e)}
+
+
 def detect_visual_domain(image: Image.Image) -> tuple:
     """
     Use CLIP zero-shot classification to determine image domain.
@@ -198,16 +268,11 @@ def detect_visual_domain(image: Image.Image) -> tuple:
         )
 
         # ── SECONDARY VALIDATION ──
-        # If the top domain confidence is low (<0.30), check if any medical
-        # domain is close.  This prevents a borderline medical image from
-        # being routed to "non_medical".
         if best_domain == "non_medical" and best_conf < 0.45:
-            # Sum up all medical domain probabilities
             medical_sum = sum(
                 float(probs[i]) for i in range(4)  # skin + xray + retina + general
             )
             if medical_sum > 0.55:
-                # Re-pick the best medical domain
                 medical_probs = {CLIP_DOMAIN_MAP[i]: float(probs[i]) for i in range(4)}
                 best_medical = max(medical_probs, key=medical_probs.get)
                 logger.info(
@@ -1058,33 +1123,15 @@ class DiseaseClassifier:
                 "predictions": [],
             }
 
-        # Ambiguous or failed CLIP domain
-        if domain in ("unknown", "ambiguous"):
-            logger.warning("Modality could not be reliably determined from visual features: %s", domain)
-            return {
-                "status": "inconclusive",
-                "message": "Image modality could not be reliably determined from visual features.",
-                "category": domain,
-                "disease": None,
-                "score": 0.0,
-                "confidence": 0.0,
-                "calibrated_conf": None,
-                "calibrated_confidence": None,
-                "domain_hint": domain,
-                "domain_scores": domain_scores,
-                "domain_confidence": round(domain_conf, 4),
-                "predictions": [],
-            }
-
         # ── 2. Determine target modality with routed_category validation ──
         target_category = domain
         if routed_category:
             routed_clean = routed_category.lower().strip()
             if routed_clean in ("skin", "xray", "retina", "general"):
-                if domain == "non_medical" and domain_conf >= 0.45:
+                if domain == "non_medical" and domain_conf >= 0.50:
                     return {
                         "status": "unsupported_image",
-                        "message": "Uploaded image is non-medical; user-requested modality override rejected.",
+                        "message": "Uploaded image appears non-medical; user-requested modality override rejected.",
                         "category": "non_medical",
                         "disease": None,
                         "score": 0.0,
@@ -1096,34 +1143,35 @@ class DiseaseClassifier:
                         "domain_confidence": round(domain_conf, 4),
                         "predictions": [],
                     }
-                # Guard against conflicting distinct modalities (e.g. xray vs retina)
-                if domain != "general" and routed_clean != domain and domain_conf >= 0.60:
-                    logger.warning(
-                        "Modality conflict: image detected as %s (conf=%.3f) but requested as %s",
-                        domain, domain_conf, routed_clean
-                    )
-                    return {
-                        "status": "inconclusive",
-                        "message": (
-                            f"Modality conflict: detected visual domain is '{domain}' but requested "
-                            f"modality was '{routed_clean}'. Cross-modality inference prevented."
-                        ),
-                        "category": domain,
-                        "disease": None,
-                        "score": 0.0,
-                        "confidence": 0.0,
-                        "calibrated_conf": None,
-                        "calibrated_confidence": None,
-                        "domain_hint": domain,
-                        "domain_scores": domain_scores,
-                        "domain_confidence": round(domain_conf, 4),
-                        "predictions": [],
-                    }
                 target_category = routed_clean
+
+        # Ambiguous or failed domain without valid routed category
+        if target_category in ("unknown", "ambiguous"):
+            logger.warning("Modality could not be reliably determined from visual features: %s", target_category)
+            return {
+                "status": "inconclusive",
+                "message": "Image modality could not be reliably determined from visual features. Please select a specific modality or upload a clearer clinical image.",
+                "category": target_category,
+                "disease": None,
+                "score": 0.0,
+                "confidence": 0.0,
+                "calibrated_conf": None,
+                "calibrated_confidence": None,
+                "domain_hint": target_category,
+                "domain_scores": domain_scores,
+                "domain_confidence": round(domain_conf, 4),
+                "predictions": [],
+            }
 
         # ── 3. HARD MODALITY LOCK: Check model availability with lazy loading ──
         model = self.get_specialist_model(target_category)
         if not model or target_category not in self.models:
+            cat_display = {
+                "skin": "Skin / Dermatology",
+                "xray": "X-ray / Radiograph",
+                "retina": "Retinal Fundus",
+                "general": "General Medical",
+            }.get(target_category, target_category.title())
             logger.warning(
                 "HARD MODALITY LOCK: Domain '%s' detected, but specialist model NOT LOADED or failed (status=%s). "
                 "Refusing unsafe fallback to general or other models.",
@@ -1132,7 +1180,11 @@ class DiseaseClassifier:
             )
             return {
                 "status": "model_unavailable",
-                "message": f"Specialist AI model for '{target_category}' is not loaded on this server.",
+                "message": (
+                    f"Specialist AI model for '{target_category}' is not loaded on this server. "
+                    f"The {cat_display} category was recognized, but the specialist deep learning analysis "
+                    "model is currently unavailable on this server. No disease classification was performed."
+                ),
                 "category": target_category,
                 "disease": None,
                 "score": 0.0,

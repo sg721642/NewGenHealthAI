@@ -16,8 +16,48 @@ from sqlalchemy.orm import Session
 from app.core.config import SESSION_EXPIRE_HOURS
 from app.core.logging_config import logger
 from app.db.session import SessionLocal, engine
-from app.models.message import Base, Conversation, Message, User, UserSession
+from app.models.message import Base, Conversation, Message, User, UserSession, _format_utc_iso
 from app.db.migrations import run_database_migration
+
+
+def generate_conversation_title(first_message: str) -> str:
+    """Generate a clean, permanent title for a conversation based on the initial query."""
+    if not first_message or not first_message.strip():
+        return "New Consultation"
+    msg = first_message.strip()
+
+    # Common quick recognitions
+    msg_lower = msg.lower()
+    if any(k in msg_lower for k in ["heart attack", "cardiac", "dil ka daura", "seene me"]):
+        return "Cardiac Emergency Consultation"
+    if any(k in msg_lower for k in ["brain hemorrhage", "stroke", "behosh", "unconscious"]):
+        return "Neurological Emergency Consultation"
+    if any(k in msg_lower for k in ["fever", "bukhar", "temperature"]):
+        return "Fever Consultation"
+    if any(k in msg_lower for k in ["cough", "cold", "flu", "khansi"]):
+        return "Respiratory Symptoms Consultation"
+    if any(k in msg_lower for k in ["headache", "migraine", "sir dard"]):
+        return "Headache Consultation"
+    if any(k in msg_lower for k in ["diabetes", "sugar"]):
+        return "Diabetes Inquiry"
+    if any(k in msg_lower for k in ["hypertension", "bp", "blood pressure"]):
+        return "Blood Pressure Inquiry"
+    if any(k in msg_lower for k in ["uploaded medical image", "image", "photo"]):
+        return "Medical Image Consultation"
+
+    # Take first 4-6 words, up to 35 chars
+    words = msg.split()
+    clean_words = []
+    for w in words[:6]:
+        clean_w = w.strip(".,?!;:-_\"'")
+        if clean_w:
+            clean_words.append(clean_w)
+    title = " ".join(clean_words)
+    if len(title) > 35:
+        title = title[:35] + "..."
+    if not title:
+        return "New Consultation"
+    return title.title()
 
 
 class DatabaseService:
@@ -122,6 +162,10 @@ class DatabaseService:
                 )
 
             conv.updated_at = datetime.now(timezone.utc)
+            if role == "user":
+                if not conv.title or conv.title.startswith("Consultation ") or conv.title == "New Consultation":
+                    conv.title = generate_conversation_title(content)
+
             session.add(
                 Message(
                     session_id=session_id,
@@ -172,26 +216,55 @@ class DatabaseService:
             ).scalars().all()
 
             results = []
+            needs_commit = False
             for conv in conversations:
-                # Find latest user message for preview
-                latest_msg = session.execute(
-                    select(Message.content)
-                    .where(Message.session_id == conv.id, Message.user_id == user_id, Message.role == "user")
-                    .order_by(desc(Message.timestamp))
-                    .limit(1)
-                ).scalar_one_or_none()
-
-                preview = latest_msg or conv.title or "New Consultation"
-                if len(preview) > 50:
-                    preview = preview[:50] + "..."
+                display_title = conv.title
+                if not display_title or display_title.startswith("Consultation ") or display_title == "New Consultation":
+                    first_msg = session.execute(
+                        select(Message.content)
+                        .where(Message.session_id == conv.id, Message.user_id == user_id, Message.role == "user")
+                        .order_by(Message.timestamp.asc())
+                        .limit(1)
+                    ).scalar_one_or_none()
+                    if first_msg:
+                        display_title = generate_conversation_title(first_msg)
+                        conv.title = display_title
+                        needs_commit = True
+                    else:
+                        display_title = "New Consultation"
 
                 results.append({
                     "session_id": conv.id,
-                    "preview": preview,
-                    "last_active": conv.updated_at.isoformat() if conv.updated_at else None,
+                    "title": display_title,
+                    "preview": display_title,
+                    "last_active": _format_utc_iso(conv.updated_at),
                 })
 
+            if needs_commit:
+                session.commit()
+
             return results
+
+    def clear_all_user_sessions(self, user_id: int) -> int:
+        """
+        Delete all conversations and their messages belonging to user_id.
+        Returns the number of conversations deleted.
+        """
+        if not user_id:
+            return 0
+
+        with self.get_session() as session:
+            # Delete messages belonging to user
+            session.execute(
+                delete(Message).where(Message.user_id == user_id)
+            )
+            # Delete conversations belonging to user
+            res = session.execute(
+                delete(Conversation).where(Conversation.user_id == user_id)
+            )
+            session.commit()
+            logger.info("Cleared all (%d) sessions for user %s", res.rowcount, user_id)
+            return res.rowcount
 
     def delete_session(self, session_id: str, user_id: int) -> bool:
         """

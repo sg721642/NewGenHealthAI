@@ -125,3 +125,93 @@ def test_ai_readiness_probe_failure_sanitization():
             assert secret_key not in res["detail"]
             assert "[REDACTED]" in res["detail"]
 
+
+def test_gibberish_triage_rejection():
+    """Gibberish during active triage does not increment round or append symptom."""
+    from app.agents.triage_agent import is_valid_triage_reply
+    assert is_valid_triage_reply("shsauidfewjew") is False
+    assert is_valid_triage_reply("asdfghjkl") is False
+    assert is_valid_triage_reply("3 days") is True
+    assert is_valid_triage_reply("mild headache and nausea") is True
+
+    state = initialize_conversation_state()
+    state["question"] = "shsauidfewjew"
+    state["triage_round"] = 1
+    state["collected_symptoms"] = ["fever"]
+    state["triage_question"] = "How many days have you had the fever?"
+    state["triage_options"] = ["1-2 days", "3-5 days", "More than a week"]
+
+    updated_state = TriageAgent(state)
+    # Triage round must NOT advance
+    assert updated_state["triage_round"] == 1
+    # Gibberish must NOT be added to collected symptoms
+    assert "shsauidfewjew" not in updated_state["collected_symptoms"]
+    assert updated_state["triage_status"] == "needs_info"
+    assert "could not understand" in updated_state["generation"].lower() or "please clarify" in updated_state["generation"].lower()
+    # Prior options must be preserved
+    assert updated_state["triage_options"] == ["1-2 days", "3-5 days", "More than a week"]
+
+
+def test_hinglish_third_person_cardiac_emergency():
+    """Third-person Hinglish cardiac emergency queries must trigger urgent routing."""
+    res1 = check_urgent_risk("mera dost ko heart attack aaya hai")
+    assert res1 is not None
+    assert res1["is_urgent"] is True
+    assert "112" in res1["advisory"]
+    assert "108" in res1["advisory"]
+
+    res2 = check_urgent_risk("mere papa ko dil ka daura pada hai")
+    assert res2 is not None
+    assert res2["is_urgent"] is True
+    assert "112" in res2["advisory"]
+
+
+def test_emergency_followup_location_delhi():
+    """Emergency follow-up mentioning Delhi must return localized Delhi dispatch guidance."""
+    from app.core.urgent_care import check_emergency_followup, generate_delhi_emergency_guidance
+    history = [
+        {"role": "user", "content": "mera dost ko heart attack aaya hai"},
+        {"role": "assistant", "content": "EMERGENCY: Call 112 immediately. What is your location?"}
+    ]
+    is_followup = check_emergency_followup("Delhi me", history)
+    assert is_followup is not None
+    assert is_followup.get("is_urgent") is True
+
+    state = initialize_conversation_state()
+    state["question"] = "Delhi me"
+    state["conversation_history"] = history
+    state = PlannerAgent(state)
+
+    assert state.get("is_urgent") is True
+    assert "112" in state["urgent_advisory"]
+    assert "108" in state["urgent_advisory"]
+    assert "AIIMS" in state["urgent_advisory"]
+    assert "Safdarjung" in state["urgent_advisory"]
+
+
+def test_sanitize_emergency_numbers():
+    """Rogue US-only 911 mentions must be sanitized to include India emergency numbers."""
+    from app.agents.executor import sanitize_emergency_numbers
+    raw = "If symptoms worsen, please call 911 immediately or visit an ER."
+    sanitized = sanitize_emergency_numbers(raw)
+    assert "112 / 108 in India" in sanitized
+
+
+def test_format_utc_iso_z():
+    """_format_utc_iso must ensure output ends with UTC 'Z'."""
+    from app.models.message import _format_utc_iso
+    from datetime import datetime, timezone
+    dt = datetime(2026, 11, 2, 4, 0, 0, tzinfo=timezone.utc)
+    formatted = _format_utc_iso(dt)
+    assert formatted.endswith("Z")
+    assert "+00:00" not in formatted
+
+
+def test_stable_conversation_title_generation():
+    """Title generation should create concise, relevant titles."""
+    from app.services.database_service import generate_conversation_title
+    assert generate_conversation_title("I have had a high fever for three days") == "Fever Consultation"
+    assert generate_conversation_title("What is diabetes?") == "Diabetes Inquiry"
+    assert generate_conversation_title("") == "New Consultation"
+
+

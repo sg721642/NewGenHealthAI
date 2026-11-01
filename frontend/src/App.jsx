@@ -40,6 +40,7 @@ export default function App() {
   const [isTyping, setIsTyping] = useState(false);
   const [inputValue, setInputValue] = useState('');
   const [aiReady, setAiReady] = useState(true);
+  const [selectedModality, setSelectedModality] = useState('auto');
 
   // UI state
   const [toast, setToast] = useState({ show: false, message: '', type: 'success' });
@@ -469,6 +470,44 @@ export default function App() {
     [loadSessions, showToast, authHeaders, createNewChat, revokeAllObjectURLs]
   );
 
+  // Clear all conversations with confirmation
+  const handleClearAllSessions = useCallback(() => {
+    if (!sessions || sessions.length === 0) {
+      showToast('No consultations to clear', 'info');
+      return;
+    }
+
+    setConfirmModal({
+      isOpen: true,
+      title: 'Clear All Consultations?',
+      message: 'This will permanently delete all consultation histories from your account. This action cannot be undone.',
+      confirmText: 'Delete All',
+      confirmVariant: 'danger',
+      onConfirm: async () => {
+        setConfirmModal((prev) => ({ ...prev, isOpen: false }));
+        requestManager.abortCategory('chat');
+        requestManager.abortCategory('image');
+        revokeAllObjectURLs();
+
+        try {
+          const res = await fetch(`${API_BASE}/sessions`, {
+            method: 'DELETE',
+            headers: authHeaders(),
+          });
+          if (res.ok) {
+            await loadSessions();
+            createNewChat();
+            showToast('All consultations cleared', 'success');
+          } else {
+            showToast('Failed to clear consultations', 'error');
+          }
+        } catch {
+          showToast('Failed to clear consultations', 'error');
+        }
+      },
+    });
+  }, [sessions, authHeaders, loadSessions, createNewChat, revokeAllObjectURLs, showToast]);
+
   // Clear current conversation
   const clearChat = useCallback(() => {
     const targetSessionId = currentSessionIdRef.current;
@@ -576,6 +615,9 @@ export default function App() {
 
     const formData = new FormData();
     formData.append('file', file);
+    if (selectedModality && selectedModality !== 'auto') {
+      formData.append('modality', selectedModality);
+    }
 
     try {
       const headers = authHeaders();
@@ -592,34 +634,23 @@ export default function App() {
 
       if (!request.isValid(currentSessionIdRef.current)) return;
 
-      if (res.status === 503) {
-        const botMsg = {
-          type: 'assistant',
-          content: '## Specialist Model Unavailable\n\nThe AI specialist model for this modality is currently unavailable or at maximum server capacity. Please retry shortly.',
-          timestamp: new Date().toLocaleTimeString(),
-          source: 'System',
-        };
-        setMessages((prev) => [...prev, botMsg]);
-        return;
-      }
-
       const data = await res.json().catch(() => ({
-        status: 'inconclusive',
+        status: res.status === 503 ? 'model_unavailable' : 'inconclusive',
         message: 'Unable to parse server response.',
       }));
 
       if (!request.isValid(currentSessionIdRef.current)) return;
 
-      if (data.status === 'model_unavailable') {
-        const catName = data.category || 'this modality';
+      if (data.status === 'model_unavailable' || res.status === 503) {
+        const catName = data.category ? data.category.charAt(0).toUpperCase() + data.category.slice(1) : 'Requested';
         let result = `## Specialist Model Unavailable\n\n`;
-        result += `The AI specialist model for **${catName}** is not loaded on this server.\n\n`;
-        result += `*${data.message || 'Model weights are required to analyze this type of medical image.'}*`;
+        result += `The AI specialist model for **${catName}** is not loaded on this server. The category was recognized, but the specialist deep learning analysis model is currently unavailable on this server.\n\n`;
+        result += `*${data.message || 'No disease classification was performed.'}*`;
         const botMsg = {
           type: 'assistant',
           content: result,
           timestamp: new Date().toLocaleTimeString(),
-          source: 'System',
+          source: 'Vision Service',
         };
         setMessages((prev) => [...prev, botMsg]);
       } else if (data.status === 'unsupported_image') {
@@ -925,6 +956,7 @@ export default function App() {
           onNewChat={createNewChat}
           onLoadSession={loadSession}
           onDeleteSession={deleteSession}
+          onClearAllSessions={handleClearAllSessions}
           onLogout={handleLogout}
           onToggleTheme={toggleTheme}
         />
@@ -968,6 +1000,8 @@ export default function App() {
               fileInputRef={fileInputRef}
               inputRef={inputRef}
               currentSessionId={currentSessionId}
+              selectedModality={selectedModality}
+              setSelectedModality={setSelectedModality}
             />
           </main>
         </div>

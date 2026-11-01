@@ -104,7 +104,7 @@ export default function WelcomeScreen({ onQuickQuestion, onTriggerImageUpload, o
             <i className="fas fa-shield-halved" />
           </div>
           <div className="notice-content">
-            <strong>Important Clinical Notice:</strong> NewGenHealthAI provides AI-generated educational health information and does not establish a physician-patient relationship. In the event of chest pain, difficulty breathing, stroke symptoms, or severe trauma, immediately contact emergency services (112 / 911) or visit the nearest emergency room.
+            <strong>Important Clinical Notice:</strong> NewGenHealthAI provides AI-generated educational health information and does not establish a physician-patient relationship. In the event of chest pain, difficulty breathing, stroke symptoms, or severe trauma, immediately contact emergency services (112 / 108 in India, or your local emergency services) or visit the nearest emergency room.
           </div>
         </div>
       </div>

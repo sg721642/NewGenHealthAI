@@ -13,6 +13,7 @@ export default function Sidebar({
   theme,
   user,
   onLogout,
+  onClearAllSessions,
 }) {
   const isExpanded = sidebarOpen !== undefined ? sidebarOpen : (isOpen !== undefined ? isOpen : true);
   const [searchQuery, setSearchQuery] = useState('');
@@ -83,9 +84,35 @@ export default function Sidebar({
       <div className="sidebar-history-container">
         <div className="history-section-header">
           <span className="history-section-title">Consultation History</span>
-          {sessions && sessions.length > 0 && (
-            <span className="history-count-badge">{sessions.length}</span>
-          )}
+          <div className="history-header-actions" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            {sessions && sessions.length > 0 && (
+              <>
+                <span className="history-count-badge">{sessions.length}</span>
+                <button
+                  type="button"
+                  className="btn-clear-all-sessions"
+                  onClick={onClearAllSessions}
+                  title="Clear all consultation history"
+                  aria-label="Clear all consultation history"
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: 'var(--color-danger, #ef4444)',
+                    fontSize: '0.78rem',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    padding: '2px 6px',
+                    borderRadius: '4px',
+                  }}
+                >
+                  <i className="fas fa-trash-can" />
+                  <span>Clear All</span>
+                </button>
+              </>
+            )}
+          </div>
         </div>
 
         <nav className="history-list" aria-label="Recent Consultations">
@@ -119,14 +146,14 @@ export default function Sidebar({
                     className="session-select-btn"
                     onClick={() => onLoadSession(session.session_id)}
                     aria-current={isActive ? 'true' : undefined}
-                    title={session.preview || 'Open conversation'}
+                    title={session.title || session.preview || 'Open conversation'}
                   >
                     <div className="session-icon" aria-hidden="true">
                       <i className="fas fa-message" />
                     </div>
                     <div className="session-body">
                       <span className="session-title">
-                        {session.preview || 'New conversation'}
+                        {session.title || session.preview || 'New conversation'}
                       </span>
                       <span className="session-time">
                         {formatTimeAgo(session.last_active)}

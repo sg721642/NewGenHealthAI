@@ -25,7 +25,11 @@ URGENT_CATEGORIES = {
             r"\bchest\s+(?:pain|pressure|tightness|heaviness)\b.*\b(?:radiat|spread|arm|jaw|neck|back)\b",
             r"\b(?:radiat|spread|arm|jaw|neck|back)\b.*\bchest\s+(?:pain|pressure|tightness|heaviness)\b",
             r"\bchest\s+(?:pain|pressure)\b.*\b(?:shortness\s+of\s+breath|sweat|diaphoresis|dizziness|nausea)\b",
-            r"\b(?:heart\s+attack|myocardial\s+infarction)\b",
+            r"\b(?:heart\s+attack|myocardial\s+infarction|cardiac\s+arrest)\b",
+            r"\b(?:dil\s+ka\s+daura|dil\s+ka\s+attack)\b",
+            r"\bseene\s+me(?:n)?\s+(?:bahut\s+tez\s+|tez\s+|bhari\s+)?(?:dard|jalan|dabav|ghutan)\b",
+            r"\bchhati\s+me(?:n)?\s+(?:tez\s+)?dard\b",
+            r"\b(?:mera|mere|meri|apne|humare|hamare|dost|friend|bhai|pita|baap|papa|pitaji|maa|mummy|mataji|pati|patni)\b.*\b(?:heart\s+attack|dil\s+ka\s+daura|seene\s+me(?:n)?\s+dard)\b",
         ],
     },
     "stroke": {
@@ -37,6 +41,10 @@ URGENT_CATEGORIES = {
             r"\b(?:sudden\s+loss\s+of\s+vision|sudden\s+blindness)\b",
             r"\b(?:thunderclap\s+headache|worst\s+headache\s+of\s+(?:my\s+)?life)\b",
             r"\b(?:stroke|transient\s+ischemic\s+attack|tia)\b",
+            r"\b(?:brain\s+hemorrhage|brain\s+stroke|cerebral\s+hemorrhage)\b",
+            r"\b(?:dimag\s+ki\s+nas\s+(?:phat|fat)\s+gayi)\b",
+            r"\b(?:behosh|unconscious|collapsed|fainted|loss\s+of\s+consciousness)\b",
+            r"\b(?:mera|mere|meri|apne|humare|hamare|dost|friend|bhai|pita|baap|papa|maa|mummy|pati|patni)\b.*\b(?:brain\s+hemorrhage|brain\s+stroke|stroke|behosh|unconscious)\b",
         ],
     },
     "respiratory": {
@@ -46,6 +54,7 @@ URGENT_CATEGORIES = {
             r"\bsevere\s+(?:shortness\s+of\s+breath|breathing\s+difficulty|dyspnea)\b",
             r"\b(?:turning\s+blue|blue\s+lips|cyanosis)\b",
             r"\b(?:stridor|choking\s+and\s+cannot\s+breathe)\b",
+            r"\bsans\s+(?:nahi\s+aa\s+rahi|lene\s+me\s+bahut\s+takleef|phool\s+rahi)\b",
         ],
     },
     "anaphylaxis": {
@@ -66,6 +75,7 @@ URGENT_CATEGORIES = {
             r"\b(?:spurting\s+blood|bleeding\s+won'?t\s+stop|uncontrolled\s+bleeding)\b",
             r"\b(?:coughing\s+up\s+blood|vomiting\s+blood|hematemesis)\b",
             r"\bsevere\s+blood\s+loss\b",
+            r"\bkhoon\s+(?:ruk\s+nahi\s+raha|ki\s+ulti)\b",
         ],
     },
     "crisis": {
@@ -206,5 +216,104 @@ def generate_urgent_advisory(
         "If you feel severely unwell, are deteriorating, or are uncertain whether this is an emergency, "
         "seek emergency care immediately — do not wait for further assessment."
     )
+
+
+DELHI_LOCATIONS = re.compile(
+    r"\b(?:delhi|new\s+delhi|ncr|noida|gurgaon|gurugram|ghaziabad|faridabad)\b",
+    re.IGNORECASE,
+)
+
+GENERAL_LOCATION_PATTERNS = re.compile(
+    r"\b(?:delhi|mumbai|bangalore|bengaluru|kolkata|chennai|hyderabad|pune|ahmedabad|jaipur|lucknow|chandigarh|ncr|near\s+me|paas\s+me|kahan\s+(?:jaun|le\s+jaun|jae|jaaye|jaana|hai)|where\s+to\s+go|which\s+hospital|nearest\s+hospital|ambulance|kya\s+kare|kya\s+karu)\b",
+    re.IGNORECASE,
+)
+
+
+def generate_delhi_emergency_guidance() -> str:
+    """Construct deterministic emergency response specifically for Delhi / NCR."""
+    return (
+        "## 🚨 Immediate Emergency Guidance — Delhi / NCR\n\n"
+        "**Your reported emergency requires immediate in-person medical dispatch. Every minute counts.**\n\n"
+        "### Immediate Emergency Telephone Numbers (Delhi / NCR):\n"
+        "- **All-in-One National Emergency:** Call **112** (Delhi Police & Emergency Response Support System)\n"
+        "- **CATS Ambulance (Delhi Govt):** Call **108** / **102** (Free 24/7 Centralized Emergency Ambulance)\n"
+        "- **AIIMS Emergency Help Desk:** Call **011-26588500** / **011-26594405**\n"
+        "- **Safdarjung Hospital Emergency:** Call **011-26165060**\n\n"
+        "### 24x7 Emergency Departments in Delhi:\n"
+        "1. **AIIMS New Delhi Emergency Department** — Sri Aurobindo Marg, Ansari Nagar\n"
+        "2. **Safdarjung Hospital Emergency Care** — Ring Road, opposite AIIMS\n"
+        "3. **Dr. Ram Manohar Lohia (RML) Hospital** — Baba Kharak Singh Marg, Connaught Place\n"
+        "4. **Lok Nayak Jai Prakash (LNJP) Hospital** — Jawaharlal Nehru Marg, near Delhi Gate\n\n"
+        "### Critical First Actions While Help Is En Route:\n"
+        "1. **Call 112 or 108 immediately** to dispatch an emergency ambulance.\n"
+        "2. **Do not drive yourself** or let the patient walk or exert themselves.\n"
+        "3. Keep the patient in a seated or comfortable resting position and loosen tight clothing.\n"
+        "4. If the person becomes unresponsive or stops breathing normally, begin chest compressions (CPR) immediately.\n\n"
+        "> **Safety Notice:** Automated tools cannot dispatch emergency vehicles or provide in-person clinical resuscitation. Call **112** or **108** right now."
+    )
+
+
+def generate_general_india_emergency_guidance() -> str:
+    """Construct deterministic emergency response for locations across India."""
+    return (
+        "## 🚨 Immediate Emergency Guidance — India\n\n"
+        "**Your reported emergency requires immediate in-person medical dispatch. Do not wait.**\n\n"
+        "### Immediate Emergency Numbers (India):\n"
+        "- **National Emergency Number:** Call **112** (All-in-one Emergency Response: Medical, Police, Fire)\n"
+        "- **Emergency Medical Ambulance:** Call **108** (Critical Care Emergency Ambulance)\n"
+        "- **National Ambulance Transport:** Call **102** (Free Medical Transport)\n\n"
+        "### Actions to Take Right Now:\n"
+        "1. **Dial 112 or 108 immediately** for an ambulance.\n"
+        "2. Go to the **nearest tertiary government or multi-specialty hospital Emergency Department (ED)**.\n"
+        "3. Keep the patient resting calmly; do not let them exert themselves.\n"
+        "4. Alert family members or neighbors nearby to assist with transport.\n\n"
+        "> **Safety Notice:** Automated systems cannot provide emergency medical care. Call **112** or **108** immediately."
+    )
+
+
+def check_emergency_followup(text: str, conversation_history: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """
+    Check if user is providing a location or asking for dispatch guidance
+    following an active emergency alert.
+    """
+    if not text or not conversation_history:
+        return None
+
+    # Check if any recent turn (within last 3 assistant turns) was an acute emergency alert
+    for item in reversed(conversation_history[-4:]):
+        if item.get("role") == "assistant":
+            content = item.get("content", "")
+            source = item.get("source", "")
+            if (
+                "Emergency Medical Alert" in content
+                or "🚨" in content
+                or "EMERGENCY" in content.upper()
+                or source in ("Urgent Medical Alert", "urgent_advisory")
+            ):
+                had_emergency = True
+                break
+
+    if not had_emergency:
+        return None
+
+    cleaned = text.strip()
+    if DELHI_LOCATIONS.search(cleaned):
+        return {
+            "is_urgent": True,
+            "category": "cardiac_or_stroke_delhi",
+            "title": "Emergency Dispatch Guidance (Delhi / NCR)",
+            "advisory": generate_delhi_emergency_guidance(),
+        }
+
+    if GENERAL_LOCATION_PATTERNS.search(cleaned):
+        return {
+            "is_urgent": True,
+            "category": "emergency_guidance_india",
+            "title": "Emergency Dispatch Guidance (India)",
+            "advisory": generate_general_india_emergency_guidance(),
+        }
+
+    return None
+
 
 

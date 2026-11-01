@@ -5,9 +5,15 @@
 export function formatTimeAgo(timestamp) {
   if (!timestamp) return '';
   const now = new Date();
-  const past = new Date(timestamp);
+  let pastStr = String(timestamp).trim();
+  // If the ISO string lacks timezone offset and lacks Z, append Z so it is treated as UTC
+  if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?$/.test(pastStr)) {
+    pastStr = pastStr.replace(' ', 'T') + 'Z';
+  }
+  const past = new Date(pastStr);
   if (isNaN(past.getTime())) return String(timestamp);
   const diffMs = now - past;
+  if (diffMs < 0) return 'Just now';
   const diffMins = Math.floor(diffMs / 60000);
   const diffHours = Math.floor(diffMs / 3600000);
   const diffDays = Math.floor(diffMs / 86400000);

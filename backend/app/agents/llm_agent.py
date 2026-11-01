@@ -7,6 +7,7 @@ Enhanced with better prompting for comprehensive medical responses.
 from app.core.logging_config import logger
 from app.core.state import AgentState
 from app.tools.llm_client import get_llm, invoke_llm_with_fallback
+from app.agents.executor import sanitize_emergency_numbers
 
 
 def LLMAgent(state: AgentState) -> AgentState:
@@ -43,12 +44,13 @@ def LLMAgent(state: AgentState) -> AgentState:
             "REPORTED SYMPTOM INFORMATION:\n"
             f"{collected_text}\n\n"
             f"Conversation History:\n{history_context}\n\n"
-            "Provide an objective, evidence-informed educational summary to assist the user in discussing their symptoms "
+            "Provide a concise, objective educational summary (~150–350 words total) to assist the user in discussing their symptoms "
             "with a licensed healthcare professional. Follow these strict clinical safety rules:\n"
             "1. DO NOT claim to be a physician, doctor, or that a clinical diagnosis has been established.\n"
             "2. DO NOT provide definitive diagnoses. Highlight diagnostic uncertainties and suggest possible conditions as educational discussion points only.\n"
             "3. DO NOT recommend specific prescription drugs, dosages, or administration schedules. You may mention general categories of over-the-counter comfort measures with advice to consult a pharmacist or doctor.\n"
-            "4. Structure your response with markdown headers:\n"
+            "4. Keep explanations brief, actionable, and clear. Avoid lengthy essays.\n"
+            "5. Structure your response with markdown headers:\n"
             "## 📋 Health Summary & Overview\n"
             "Objective summary of symptoms reported by the user.\n\n"
             "## 🔍 Educational Considerations\n"
@@ -56,7 +58,7 @@ def LLMAgent(state: AgentState) -> AgentState:
             "## 💡 Supportive Self-Care & General Measures\n"
             "Safe, non-pharmacological comfort measures (e.g. hydration, rest, position).\n\n"
             "## ⚠️ Red Flags & Warning Signs\n"
-            "Specific warning signs requiring immediate or emergency medical care.\n\n"
+            "Specific warning signs requiring immediate or emergency medical care (call 112 / 108 in India).\n\n"
             "## 🩺 In-Person Consultation Guidance\n"
             "Practical questions and steps for consulting a healthcare professional."
         )
@@ -67,7 +69,7 @@ def LLMAgent(state: AgentState) -> AgentState:
             "You are NOT a doctor, and provide general health information for educational purposes only.\n\n"
             f"Conversation History:\n{history_context}\n"
             f"User Question:\n{state['question']}\n\n"
-            "Provide a helpful, educational response. Strictly adhere to these safety rules:\n"
+            "Provide a concise, helpful educational response (~150–350 words). Strictly adhere to these safety rules:\n"
             "- Do not impersonate a physician or claim clinical examination.\n"
             "- Do not provide patient-specific prescriptions or drug dosages.\n"
             "- Acknowledge uncertainties when symptom details are incomplete.\n"
@@ -82,11 +84,11 @@ def LLMAgent(state: AgentState) -> AgentState:
             except Exception as e:
                 err_msg = str(e)
                 if any(w in err_msg.lower() for w in ["404", "not found", "decommissioned", "deprecated", "does not exist"]):
-                    response = invoke_llm_with_fallback(prompt, temperature=0.3, max_tokens=2048)
+                    response = invoke_llm_with_fallback(prompt, temperature=0.3, max_tokens=1000)
                 else:
                     raise
         else:
-            response = invoke_llm_with_fallback(prompt, temperature=0.3, max_tokens=2048)
+            response = invoke_llm_with_fallback(prompt, temperature=0.3, max_tokens=1000)
         answer = ""
         if response is not None:
             answer = (
@@ -96,6 +98,7 @@ def LLMAgent(state: AgentState) -> AgentState:
             )
 
         if answer and len(answer) > 10:
+            answer = sanitize_emergency_numbers(answer)
             state["generation"] = answer
             state["llm_success"] = True
             state["source"] = "AI Medical Knowledge"

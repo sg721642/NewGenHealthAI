@@ -8,7 +8,7 @@ import asyncio
 import io
 import os
 from typing import Dict, Optional
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 from PIL import Image
 
@@ -286,6 +286,7 @@ async def get_diagnostics():
 @router.post("/api/v1/analyze-image")
 async def analyze_image(
     file: UploadFile = File(...),
+    modality: Optional[str] = Form(None),
     current_user: User = Depends(get_current_user),
 ):
     """
@@ -333,11 +334,29 @@ async def analyze_image(
             )
 
         try:
-            from app.services.disease_classifier import disease_classifier
+            from app.services.disease_classifier import (
+                disease_classifier,
+                detect_domain_from_visual_features,
+            )
 
             # ── 3. Execute Disease Classification in Worker Thread ──
-            prediction = await asyncio.to_thread(disease_classifier.classify, image)
+            prediction = await asyncio.to_thread(
+                disease_classifier.classify, image, routed_category=modality
+            )
             status = prediction.get("status", "inconclusive")
+
+            # Fallback domain detection using visual features if inconclusive and modality not explicitly set
+            if status == "inconclusive" and not modality:
+                vf_domain, vf_conf, vf_scores = detect_domain_from_visual_features(image)
+                if vf_domain == "non_medical":
+                    status = "unsupported_image"
+                    prediction["domain_hint"] = "non_medical"
+                    prediction["domain_confidence"] = vf_conf
+                elif vf_domain in ("skin", "xray", "retina"):
+                    prediction = await asyncio.to_thread(
+                        disease_classifier.classify, image, routed_category=vf_domain
+                    )
+                    status = prediction.get("status", "inconclusive")
 
             # ── 4. Handle 'model_unavailable' (HTTP 503) ──
             if status == "model_unavailable":

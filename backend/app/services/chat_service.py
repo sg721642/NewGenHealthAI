@@ -463,6 +463,15 @@ class ClinicalEngine:
         async with self.lock_manager.lock(memory_key):
             return self.delete_conversation(session_id, user_id)
 
+    def clear_user_states(self, user_id: int) -> None:
+        """Evict all in-memory conversation states belonging to user_id."""
+        prefix = f"{user_id}:"
+        keys_to_remove = [k for k in list(self.conversation_states.keys()) if k.startswith(prefix)]
+        for k in keys_to_remove:
+            self._mark_deleted(k)
+            self.conversation_states.pop(k, None)
+        logger.info("Cleared %d in-memory conversation states for user %s", len(keys_to_remove), user_id)
+
 
 # Module-level singleton
 clinical_engine = ClinicalEngine()

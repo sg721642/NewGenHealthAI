@@ -20,6 +20,67 @@ from app.tools.llm_client import invoke_llm_with_fallback, get_llm
 
 MAX_TRIAGE_ROUNDS = 3
 
+COMMON_WORDS = set(
+    """
+    a about above after again against all also am an and any are aren't as at be because been before being below
+    between both but by can can't cannot could couldn't did didn't do does doesn't doing don't down during each
+    few for from further had hadn't has hasn't have haven't having he he'd he'll he's her here here's hers herself
+    him himself his how how's i i'd i'll i'm i've if in into is isn't it it's its itself let's me more most mustn't
+    my myself no nor not of off on once only or other ought our ours ourselves out over own same shan't she she'd
+    she'll she's should shouldn't so some such than that that's the their theirs them themselves then there there's
+    these they they'd they'll they're they've this those through to too under until up very was wasn't we we'd we'll
+    we're we've were weren't what what's when when's where where's which while who who's whom why why's with won't
+    would wouldn't you you'd you'll you're you've
+    yes no haan ha nahi nahin na dont don't know sure okay ok maybe fine
+    day days week weeks month months year years hour hours hr hrs min mins minute minutes
+    today yesterday morning evening night afternoon daily
+    monday tuesday wednesday thursday friday saturday sunday
+    pain ache aching sore hurt hurting sharp dull throbbing burning constant mild moderate severe
+    fever cold flu cough headache chills nausea vomiting dizzy dizziness fatigue tired weakness
+    high low fluctuating worse better nothing none neither
+    kal aaj parso subah sham raat din dard bukhar khansi tez thoda jyada kam
+    """.split()
+)
+
+
+def is_valid_triage_reply(text: str) -> bool:
+    """Validate that a user reply to a triage follow-up question is meaningful content, not random keystrokes or gibberish."""
+    if not text or not text.strip():
+        return False
+    t = text.strip().lower()
+
+    words = re.findall(r"[a-z0-9]+", t)
+    if not words:
+        return False
+
+    # Check if single token is a pure number within reasonable symptom range
+    if len(words) == 1 and words[0].isdigit():
+        val = int(words[0])
+        return 0 <= val <= 365
+
+    # Check if any recognized common word or medical/time token is present
+    match_count = sum(1 for w in words if w in COMMON_WORDS)
+    if match_count > 0:
+        return True
+
+    # Check for duration patterns like '2d', '3h', '1w'
+    if re.search(r"\b\d+\s*(?:d|h|w|m|days?|hours?|weeks?|months?)\b", t):
+        return True
+
+    # Check for keyboard smashes or gibberish
+    for w in words:
+        if w.isalpha():
+            if re.search(r"(?:asdf|sdfg|dfgh|fghj|ghjk|hjkl|qwer|werty|ertyu|rtyui|tyuio|yuio|zxcv|xcvb|cvbn|vbnm)", w):
+                return False
+            vowels = len(re.findall(r"[aeiouy]", w))
+            consonants = len(w) - vowels
+            if len(w) >= 5 and (vowels == 0 or consonants == 0):
+                return False
+            if re.search(r"(.)\1{2,}", w):
+                return False
+
+    return False
+
 
 def _get_triage_llm():
     """Return a high-temperature Groq LLM specifically for dynamic triage."""
@@ -100,7 +161,44 @@ def TriageAgent(state: AgentState) -> AgentState:
     collected = list(state.get("collected_symptoms", []))
     questions_asked = list(state.get("questions_asked", []))
 
-    # Append current message to collected symptoms if non-empty
+    # Validate follow-up response if in an active triage session
+    if triage_round > 0:
+        if not is_valid_triage_reply(question):
+            logger.warning("Triage: rejected invalid or gibberish response: '%s'", question[:30])
+            last_question = questions_asked[-1] if questions_asked else "How long have you been experiencing this symptom?"
+
+            # Retrieve existing options from follow_up_data if available
+            existing_options = []
+            if state.get("follow_up_data") and state["follow_up_data"].get("questions"):
+                existing_options = state["follow_up_data"]["questions"][0].get("options", [])
+            if not existing_options:
+                fb = _get_fallback_triage_question(
+                    triage_round - 1,
+                    question,
+                    collected,
+                    questions_asked[:-1] if len(questions_asked) > 1 else [],
+                )
+                existing_options = fb.get("options", ["Less than 24 hours", "1–3 days", "4–7 days", "More than a week"]) if fb else ["Less than 24 hours", "1–3 days", "4–7 days", "More than a week"]
+
+            state["triage_status"] = "needs_info"
+            state["generation"] = (
+                "I couldn't quite understand that response. To help provide accurate health guidance, "
+                f"could you please clarify your answer to the question below or select one of the suggested options?\n\n**{last_question}**"
+            )
+            state["source"] = "Clinical Triage"
+            state["follow_up_data"] = {
+                "questions": [
+                    {
+                        "text": last_question,
+                        "options": existing_options[:5],
+                    }
+                ],
+                "triage_round": triage_round,
+                "max_rounds": MAX_TRIAGE_ROUNDS,
+            }
+            return state
+
+    # Append valid message to collected symptoms if non-empty
     if question:
         collected.append(question)
         state["collected_symptoms"] = collected

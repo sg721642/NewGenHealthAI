@@ -140,3 +140,21 @@ async def delete_session_endpoint(
         req.session.pop("session_id", None)
 
     return {"message": "Session deleted", "success": True}
+
+
+@router.delete("/sessions")
+async def clear_all_sessions_endpoint(
+    req: Request, current_user: User = Depends(get_current_user)
+):
+    """
+    Delete all conversations and in-memory states belonging to the authenticated user.
+    Never touches records belonging to other users.
+    """
+    count = db_service.clear_all_user_sessions(user_id=current_user.id)
+    clinical_engine.clear_user_states(user_id=current_user.id)
+    req.session.pop("session_id", None)
+    return {
+        "message": f"Successfully deleted {count} consultation(s)",
+        "deleted_count": count,
+        "success": True,
+    }

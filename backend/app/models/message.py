@@ -19,6 +19,20 @@ Base = declarative_base()
 _hasher = PasswordHasher()
 
 
+def _format_utc_iso(dt: Optional[datetime]) -> Optional[str]:
+    """Format datetime as strict ISO-8601 with explicit Z UTC indicator."""
+    if not dt:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    s = dt.isoformat()
+    if s.endswith("+00:00"):
+        return s[:-6] + "Z"
+    if not s.endswith("Z") and "+" not in s:
+        return s + "Z"
+    return s
+
+
 class PasswordVerificationResult(NamedTuple):
     """Result of password verification, indicating rehash requirements."""
     is_valid: bool
@@ -43,7 +57,7 @@ class User(Base):
         return {
             "id": self.id,
             "username": self.username,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "created_at": _format_utc_iso(self.created_at),
         }
 
     @staticmethod
@@ -114,8 +128,8 @@ class Conversation(Base):
             "id": self.id,
             "user_id": self.user_id,
             "title": self.title,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "created_at": _format_utc_iso(self.created_at),
+            "updated_at": _format_utc_iso(self.updated_at),
             "is_quarantined": bool(self.is_quarantined),
         }
 
@@ -141,6 +155,6 @@ class Message(Base):
             "role": self.role,
             "content": self.content,
             "source": self.source,
-            "timestamp": self.timestamp.isoformat() if self.timestamp else None,
+            "timestamp": _format_utc_iso(self.timestamp),
         }
 
