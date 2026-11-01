@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import Header from './components/Header';
 import Sidebar from './components/Sidebar';
 import ChatTimeline from './components/ChatTimeline';
@@ -41,6 +41,12 @@ export default function App() {
   const [inputValue, setInputValue] = useState('');
   const [aiReady, setAiReady] = useState(true);
   const [selectedModality, setSelectedModality] = useState('auto');
+
+  const currentSessionTitle = useMemo(() => {
+    if (!currentSessionId || !sessions) return '';
+    const s = sessions.find((item) => item.session_id === currentSessionId);
+    return s ? (s.title || s.preview || '') : '';
+  }, [currentSessionId, sessions]);
 
   // UI state
   const [toast, setToast] = useState({ show: false, message: '', type: 'success' });
@@ -618,6 +624,20 @@ export default function App() {
     setIsTyping(true);
     setShowWelcome(false);
 
+    // Update session title locally in sessions list to "Medical Image Consultation"
+    if (targetSessionId) {
+      setSessions((prev) => {
+        if (!prev) return [{ session_id: targetSessionId, title: 'Medical Image Consultation', preview: 'Medical Image Consultation' }];
+        const idx = prev.findIndex((s) => s.session_id === targetSessionId);
+        if (idx >= 0) {
+          const updated = [...prev];
+          updated[idx] = { ...updated[idx], title: 'Medical Image Consultation', preview: 'Medical Image Consultation' };
+          return updated;
+        }
+        return [{ session_id: targetSessionId, title: 'Medical Image Consultation', preview: 'Medical Image Consultation' }, ...prev];
+      });
+    }
+
     const formData = new FormData();
     formData.append('file', file);
     if (selectedModality && selectedModality !== 'auto') {
@@ -647,10 +667,8 @@ export default function App() {
       if (!request.isValid(currentSessionIdRef.current)) return;
 
       if (data.status === 'model_unavailable' || res.status === 503) {
-        const catName = data.category ? data.category.charAt(0).toUpperCase() + data.category.slice(1) : 'Requested';
-        let result = `## Specialist Model Unavailable\n\n`;
-        result += `The AI specialist model for **${catName}** is not loaded on this server. The category was recognized, but the specialist deep learning analysis model is currently unavailable on this server.\n\n`;
-        result += `*${data.message || 'No disease classification was performed.'}*`;
+        const catName = data.category ? data.category.toLowerCase() : 'skin';
+        const result = `## Specialist Model Unavailable\n\nThe AI specialist model for **${catName}** is not available on this server, so no disease prediction was performed. For medical concerns, consult a qualified healthcare professional.`;
         const botMsg = {
           type: 'assistant',
           content: result,
@@ -658,6 +676,7 @@ export default function App() {
           source: 'Vision Service',
         };
         setMessages((prev) => [...prev, botMsg]);
+        await loadSessions();
       } else if (data.status === 'unsupported_image') {
         let result = `## Unsupported Image\n\n`;
         if (data.description) {
@@ -668,9 +687,10 @@ export default function App() {
           type: 'assistant',
           content: result,
           timestamp: new Date().toLocaleTimeString(),
-          source: 'Vision Classifier',
+          source: 'Vision Service',
         };
         setMessages((prev) => [...prev, botMsg]);
+        await loadSessions();
       } else if (data.status === 'inconclusive') {
         let result = `## Analysis Inconclusive\n\n`;
         result += `${data.message || 'The image could not be reliably classified or visual features were ambiguous.'}\n\n`;
@@ -679,9 +699,10 @@ export default function App() {
           type: 'assistant',
           content: result,
           timestamp: new Date().toLocaleTimeString(),
-          source: 'Vision Classifier',
+          source: 'Vision Service',
         };
         setMessages((prev) => [...prev, botMsg]);
+        await loadSessions();
       } else if (data.status === 'invalid_image') {
         let result = `## Invalid Image\n\n`;
         result += `${data.error || 'The uploaded file could not be decoded as a valid image format.'}\n`;
@@ -983,6 +1004,7 @@ export default function App() {
             user={user}
             onLogout={handleLogout}
             aiReady={aiReady}
+            currentSessionTitle={currentSessionTitle}
           />
 
           {/* Main Clinical Workspace */}

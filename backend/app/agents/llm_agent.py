@@ -38,12 +38,30 @@ def LLMAgent(state: AgentState) -> AgentState:
 
     if triage_round > 0 and collected:
         collected_text = "\n".join(f"  - {s}" for s in collected)
+
+        # Multi-symptom risk evaluation: fever + cough + breathlessness/dyspnea
+        all_sym_lower = " ".join(collected).lower()
+        has_fever = any(k in all_sym_lower for k in ["fever", "bukhar", "temp", "100", "101", "102", "chills", "degree"])
+        has_cough = any(k in all_sym_lower for k in ["cough", "khansi"])
+        has_dyspnea = any(k in all_sym_lower for k in ["breath", "breathing", "saans", "dyspnea", "shortness", "occasionally", "phool"])
+        triad_instruction = ""
+        if has_fever and has_cough and has_dyspnea:
+            triad_instruction = (
+                "\nCRITICAL CLINICAL SAFETY RULE FOR MULTI-SYMPTOM RESPIRATORY RISK:\n"
+                "The patient reported the clinical triad of fever/chills, cough, and shortness of breath (dyspnea). "
+                "1. Under 'Educational Considerations', explicitly highlight lower respiratory tract conditions to discuss with a clinician "
+                "(e.g., bronchitis, pneumonia, or acute viral/bacterial respiratory infections) rather than dismissing as a common cold.\n"
+                "2. Under 'Supportive Self-Care', suggest monitoring oxygen saturation (SpO2) with a pulse oximeter if available.\n"
+                "3. Under 'In-Person Consultation Guidance', strongly emphasize prompt in-person medical evaluation.\n"
+            )
+
         prompt = (
             "You are NewGenHealthAI, an automated medical education and informational assistant. "
             "You are NOT a doctor or licensed clinical physician, and have NOT performed a physical examination.\n\n"
             "REPORTED SYMPTOM INFORMATION:\n"
             f"{collected_text}\n\n"
-            f"Conversation History:\n{history_context}\n\n"
+            f"Conversation History:\n{history_context}\n"
+            f"{triad_instruction}\n"
             "Provide a concise, objective educational summary (~150–350 words total) to assist the user in discussing their symptoms "
             "with a licensed healthcare professional. Follow these strict clinical safety rules:\n"
             "1. DO NOT claim to be a physician, doctor, or that a clinical diagnosis has been established.\n"
@@ -58,7 +76,7 @@ def LLMAgent(state: AgentState) -> AgentState:
             "## 💡 Supportive Self-Care & General Measures\n"
             "Safe, non-pharmacological comfort measures (e.g. hydration, rest, position).\n\n"
             "## ⚠️ Red Flags & Warning Signs\n"
-            "Specific warning signs requiring immediate or emergency medical care (call 112 / 108 in India).\n\n"
+            "Specific warning signs requiring immediate or emergency medical care (call 112 / 108 / 102 in India).\n\n"
             "## 🩺 In-Person Consultation Guidance\n"
             "Practical questions and steps for consulting a healthcare professional."
         )

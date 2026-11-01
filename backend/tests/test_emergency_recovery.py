@@ -212,6 +212,120 @@ def test_stable_conversation_title_generation():
     from app.services.database_service import generate_conversation_title
     assert generate_conversation_title("I have had a high fever for three days") == "Fever Consultation"
     assert generate_conversation_title("What is diabetes?") == "Diabetes Inquiry"
+    assert generate_conversation_title("Uploaded medical image for clinical analysis") == "Medical Image Consultation"
     assert generate_conversation_title("") == "New Consultation"
+
+
+def test_unicode_temperature_option_accepted():
+    """The choice chip '100–102°F (37.8–38.9°C)' must be recognized as valid."""
+    from app.agents.triage_agent import is_valid_triage_reply
+    options = ["Below 100°F (37.8°C)", "100–102°F (37.8–38.9°C)", "Above 102°F (38.9°C)", "Not measured yet"]
+    reply = "100–102°F (37.8–38.9°C)"
+    assert is_valid_triage_reply(reply, pending_question="What is your temperature?", pending_options=options) is True
+    # Also valid without pending options via pattern matching
+    assert is_valid_triage_reply(reply) is True
+    assert is_valid_triage_reply("101°F") is True
+    assert is_valid_triage_reply("38.5 C") is True
+
+
+def test_occasional_shortness_of_breath_accepted():
+    """'Occasionally' must be recognized as a valid triage answer without false emergency or gibberish rejection."""
+    from app.agents.triage_agent import is_valid_triage_reply
+    options = ["None", "Occasionally", "When walking or climbing", "Constant / resting"]
+    assert is_valid_triage_reply("Occasionally", pending_options=options) is True
+    assert is_valid_triage_reply("occasionally") is True
+    assert is_valid_triage_reply("sometimes") is True
+    assert is_valid_triage_reply("kabhi kabhi saans phoolti hai") is True
+
+
+def test_gibberish_preserves_temperature_question_and_options():
+    """Gibberish under a temperature question must reprompt the temperature question with temperature options, not duration."""
+    state = initialize_conversation_state()
+    state["triage_round"] = 1
+    state["questions_asked"] = ["What has your body temperature measured, or how high does the fever feel?"]
+    state["pending_follow_up_data"] = {
+        "questions": [
+            {
+                "text": "What has your body temperature measured, or how high does the fever feel?",
+                "options": ["Below 100°F (37.8°C)", "100–102°F (37.8–38.9°C)", "Above 102°F (38.9°C)", "Not measured yet"],
+                "question_type": "temperature",
+            }
+        ]
+    }
+    state["question"] = "asdfghjkl zxcvbnm"
+    res = TriageAgent(state)
+
+    assert res["triage_status"] == "needs_info"
+    assert "What has your body temperature measured" in res["generation"]
+    # Verify options are temperature options, NOT duration
+    opts = res["follow_up_data"]["questions"][0]["options"]
+    assert any("100" in o or "°F" in o for o in opts)
+    assert not any("1–3 days" in o or "hours" in o for o in opts)
+
+
+def test_delhi_cats_ambulance_is_102():
+    """Delhi CATS Ambulance must be clearly designated as 102 in emergency guidance."""
+    from app.core.urgent_care import generate_delhi_emergency_guidance
+    guidance = generate_delhi_emergency_guidance()
+    assert "102" in guidance
+    assert "CATS Ambulance" in guidance
+    assert "112" in guidance
+
+
+def test_multi_symptom_respiratory_triad_assessment():
+    """When fever, cough, and shortness of breath coexist, educational summary must address lower respiratory tract risks."""
+    state = initialize_conversation_state()
+    state["triage_round"] = 3
+    state["collected_symptoms"] = [
+        "I have a fever of 101 F",
+        "Persistent dry cough for 3 days",
+        "Occasionally short of breath",
+    ]
+    state["source"] = "AI Medical Knowledge"
+    # Execute through fallback path when LLM fails or is unavailable
+    with patch("app.agents.executor.get_llm", return_value=None):
+        res = ExecutorAgent(state)
+        content = res["generation"]
+        assert "lower respiratory" in content.lower() or "pneumonia" in content.lower() or "bronchitis" in content.lower()
+        assert "pulse oximeter" in content.lower() or "spo2" in content.lower()
+        assert "prompt" in content.lower() or "in-person" in content.lower()
+
+
+def test_third_person_hindi_cardiac_emergency_continuity():
+    """Third-person Hindi cardiac emergency followed by 'Delhi me' must route correctly to Delhi dispatch."""
+    # Turn 1
+    state1 = initialize_conversation_state()
+    state1["question"] = "mera dost ko heart attack aa gaya hai"
+    res1 = PlannerAgent(state1)
+    assert res1.get("is_urgent") is True
+    assert "cardiac" in res1.get("urgent_category", "")
+
+    # Turn 2: User says "Delhi me"
+    history = [
+        {"role": "user", "content": "mera dost ko heart attack aa gaya hai"},
+        {"role": "assistant", "content": res1["urgent_advisory"], "source": "Urgent Medical Alert"},
+    ]
+    state2 = initialize_conversation_state()
+    state2["question"] = "Delhi me"
+    state2["conversation_history"] = history
+    res2 = PlannerAgent(state2)
+
+    assert res2.get("is_urgent") is True
+    assert "102" in res2["urgent_advisory"]
+    assert "CATS Ambulance" in res2["urgent_advisory"]
+    assert "112" in res2["urgent_advisory"]
+    assert "AIIMS" in res2["urgent_advisory"]
+
+
+def test_non_medical_image_rejection_with_skin_override():
+    """Non-medical green image must be rejected as unsupported_image even if routed_category='skin' is passed."""
+    from PIL import Image
+    from app.services.disease_classifier import disease_classifier
+    # Green landscape image (high green chroma, 0 skin)
+    green_img = Image.new("RGB", (256, 256), color=(20, 200, 30))
+    res = disease_classifier.classify(green_img, routed_category="skin")
+    assert res["status"] == "unsupported_image"
+    assert res["category"] == "non_medical"
+
 
 

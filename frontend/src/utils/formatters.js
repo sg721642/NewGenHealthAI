@@ -24,6 +24,30 @@ export function formatTimeAgo(timestamp) {
   return past.toLocaleDateString();
 }
 
+/**
+ * Format message timestamp into a clean localized time string (e.g. "04:31 AM" or "10:15 PM").
+ * Safely parses ISO UTC timestamps (e.g. "2026-11-01T22:59:24.148046Z"), date strings,
+ * or returns existing localized time strings untouched.
+ */
+export function formatMessageTimestamp(timestamp) {
+  if (!timestamp) return '';
+  const str = String(timestamp).trim();
+  // If already formatted like '10:30 PM' or '04:31 AM', return as-is
+  if (/^\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM|am|pm)$/i.test(str)) {
+    return str;
+  }
+  // Normalize ISO timestamp without timezone designator to UTC
+  let isoStr = str;
+  if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?$/.test(isoStr)) {
+    isoStr = isoStr.replace(' ', 'T') + 'Z';
+  }
+  const date = new Date(isoStr);
+  if (!isNaN(date.getTime())) {
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+  return str;
+}
+
 export function buildDownloadText(chatHistory) {
   let content = 'NewGenHealthAI Consultation Export\n';
   content += '='.repeat(50) + '\n';
@@ -32,7 +56,7 @@ export function buildDownloadText(chatHistory) {
   content += '='.repeat(50) + '\n\n';
   (chatHistory || []).forEach((msg) => {
     const sender = msg.type === 'user' ? 'Patient / User' : 'NewGenHealthAI Assistant';
-    content += `[${msg.timestamp || 'No time'}] ${sender}:\n`;
+    content += `[${formatMessageTimestamp(msg.timestamp) || 'No time'}] ${sender}:\n`;
     content += (msg.content || '') + '\n';
     if (msg.source) content += `Clinical Source: ${msg.source}\n`;
     content += '\n';

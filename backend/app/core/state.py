@@ -34,6 +34,7 @@ class AgentState(TypedDict):
     collected_symptoms: List[str]       # accumulated patient details across turns
     questions_asked: List[str]          # exact questions already asked (to avoid repeats)
     follow_up_data: Optional[Dict[str, Any]]  # structured follow-up for frontend chips
+    pending_follow_up_data: Optional[Dict[str, Any]]  # active follow-up contract from previous turn
     is_medical_query: bool              # whether planner flagged this as medical
 
     # ── Phase 2B: Urgent Risk & Bounded Workflow Safeguards ─────────
@@ -72,6 +73,7 @@ def initialize_conversation_state() -> AgentState:
         "collected_symptoms": [],
         "questions_asked": [],
         "follow_up_data": None,
+        "pending_follow_up_data": None,
         "is_medical_query": False,
         # Phase 2B Safeguards
         "is_urgent": False,
@@ -87,6 +89,8 @@ def initialize_conversation_state() -> AgentState:
 
 def reset_query_state(state: AgentState) -> AgentState:
     """Reset per-query flags while preserving conversation history and triage context."""
+    # Preserve prior turn's follow_up_data as pending_follow_up_data so triage can validate user's reply
+    pending_follow_up = state.get("follow_up_data") or state.get("pending_follow_up_data")
     state.update(
         {
             "question": "",
@@ -105,9 +109,10 @@ def reset_query_state(state: AgentState) -> AgentState:
             "current_tool": None,
             "retry_count": 0,
             # Keep triage_round and collected_symptoms across turns!
-            # Only reset follow_up_data and triage_status per query
+            # Preserve pending follow-up question/options contract
             "triage_status": None,
             "follow_up_data": None,
+            "pending_follow_up_data": pending_follow_up,
             # Reset per-query Phase 2B flags
             "is_urgent": False,
             "urgent_advisory": None,

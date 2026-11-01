@@ -135,13 +135,14 @@ def ExecutorAgent(state: AgentState) -> AgentState:
     has_docs = bool(state.get("documents") and len(state["documents"]) > 0)
     has_llm = bool(state.get("llm_success") and state.get("generation"))
     all_providers_exhausted = bool(state.get("exhaustion_reason"))
+    has_triaged_symptoms = bool(state.get("collected_symptoms") and len(state.get("collected_symptoms", [])) > 0)
     llm = get_llm()
 
     # Terminate immediately if:
-    # (a) all providers failed and no pre-generated content exists, OR
+    # (a) all providers failed and no pre-generated content exists (unless post-triage symptoms need synthesis), OR
     # (b) the fallback chain explicitly flagged exhaustion via exhaustion_reason
     #     (prevents unbounded secondary LLM calls after budget is spent)
-    if all_providers_exhausted or (not has_docs and not has_llm and not llm):
+    if (all_providers_exhausted or (not has_docs and not has_llm and not llm)) and not has_triaged_symptoms:
         exhaust_reason = state.get("exhaustion_reason", "no_providers_available")
         logger.warning(
             "Executor: provider exhaustion — terminating (reason=%s, result_state=PROVIDER_UNAVAILABLE)",
@@ -170,8 +171,26 @@ def ExecutorAgent(state: AgentState) -> AgentState:
             history_context += f"Assistant: {item.get('content', '')}\n"
 
     # ── 4. Post-Triage Comprehensive Educational Summary ───────────────
-    if triage_round > 0 and collected_symptoms and llm:
+    if triage_round > 0 and collected_symptoms:
         collected_text = "\n".join(f"  - {s}" for s in collected_symptoms)
+
+        # Multi-symptom risk evaluation: fever + cough + breathlessness/dyspnea
+        all_sym_lower = " ".join(collected_symptoms).lower()
+        has_fever = any(k in all_sym_lower for k in ["fever", "bukhar", "temp", "100", "101", "102", "chills", "degree"])
+        has_cough = any(k in all_sym_lower for k in ["cough", "khansi"])
+        has_dyspnea = any(k in all_sym_lower for k in ["breath", "breathing", "saans", "dyspnea", "shortness", "occasionally", "phool"])
+        triad_respiratory = has_fever and has_cough and has_dyspnea
+
+        triad_instruction = ""
+        if triad_respiratory:
+            triad_instruction = (
+                "\nCRITICAL CLINICAL SAFETY RULE FOR MULTI-SYMPTOM RESPIRATORY RISK:\n"
+                "The patient reported the clinical triad of fever/chills, cough, and shortness of breath (dyspnea). "
+                "1. Under 'Educational Possibilities', explicitly highlight lower respiratory tract conditions to discuss with a clinician "
+                "(e.g., bronchitis, pneumonia, or acute viral/bacterial respiratory infections) rather than dismissing as a common cold.\n"
+                "2. Under 'Supportive Self-Care', suggest monitoring oxygen saturation (SpO2) with a pulse oximeter if available.\n"
+                "3. Under 'Guidance for Healthcare Provider Consultation', strongly emphasize prompt in-person medical evaluation.\n"
+            )
 
         doc_section = ""
         citations = ""
@@ -187,7 +206,8 @@ def ExecutorAgent(state: AgentState) -> AgentState:
             "You are NOT a doctor or clinical physician and have NOT conducted an in-person physical examination.\n\n"
             f"REPORTED SYMPTOMS SUMMARY:\n{collected_text}\n\n"
             f"Conversation History:\n{history_context}\n"
-            f"{doc_section}\n\n"
+            f"{doc_section}\n"
+            f"{triad_instruction}\n"
             "Provide a concise, practical educational summary (approximately 150–350 words total) to help the user prepare "
             "for an in-person discussion with a licensed healthcare professional. Strictly adhere to these clinical safety constraints:\n"
             "1. NEVER claim to be a physician, doctor, or that a clinical diagnosis has been made.\n"
@@ -227,19 +247,34 @@ def ExecutorAgent(state: AgentState) -> AgentState:
         except Exception as e:
             logger.error("Executor: post-triage LLM generation failed (%s): %s", type(e).__name__, str(e)[:120])
             symptoms_list = "\n".join(f"- {s}" for s in collected_symptoms)
+            
+            if triad_respiratory:
+                diff_text = (
+                    "The combination of fever, cough, and shortness of breath (dyspnea) warrants careful clinical assessment. "
+                    "Possible conditions to discuss with a physician include lower respiratory tract infection, acute bronchitis, "
+                    "or pneumonia, which require physical examination and auscultation."
+                )
+                self_care_extra = "- If a pulse oximeter is available, check your oxygen saturation (SpO2) at rest (normal is generally ≥95%).\n"
+                consult_extra = "Because shortness of breath accompanied by fever and cough can reflect lower respiratory involvement, seek prompt in-person medical evaluation rather than assuming it is a routine cold."
+            else:
+                diff_text = "Prolonged or recurring symptoms may be associated with viral infections, bacterial illness, or other inflammatory conditions that require professional clinical evaluation and diagnostic testing."
+                self_care_extra = ""
+                consult_extra = "Inform your doctor about the exact onset date, temperature readings, associated symptoms, and any home remedies or over-the-counter medications tried."
+
             answer = (
                 "## 📋 Health Summary & Overview\n"
                 f"You reported the following symptoms during intake clarification:\n{symptoms_list}\n\n"
                 "## 🔍 Educational Possibilities & Discussion Points\n"
-                "Prolonged or recurring symptoms may be associated with viral infections, bacterial illness, or other inflammatory conditions that require professional clinical evaluation and diagnostic testing.\n\n"
+                f"{diff_text}\n\n"
                 "## 💡 Supportive Self-Care & General Measures\n"
                 "- Maintain adequate fluid intake (water, oral rehydration solutions, or clear broths).\n"
                 "- Get adequate rest and avoid strenuous physical exertion.\n"
+                f"{self_care_extra}"
                 "- Monitor your temperature and symptoms closely.\n\n"
                 "## ⚠️ Red Flags & Warning Signs\n"
-                "Seek immediate emergency medical care (call 112 / 108) if you experience severe shortness of breath, persistent chest pain, confusion, severe dehydration, or an unmanageable high fever (>103°F / 39.4°C).\n\n"
+                "Seek immediate emergency medical care (call 112 / 108 / 102 in India) if you experience severe shortness of breath, persistent chest pain, confusion, lips turning blue, or an unmanageable high fever (>103°F / 39.4°C).\n\n"
                 "## 🩺 Guidance for Healthcare Provider Consultation\n"
-                "Inform your doctor about the exact onset date, temperature readings, associated symptoms, and any home remedies or over-the-counter medications tried.\n\n"
+                f"{consult_extra}\n\n"
                 "> **Medical Disclaimer:** This summary is for educational and informational purposes only and does not substitute for professional medical advice, clinical diagnosis, or individualized treatment."
             )
             source_info = "Educational Health Assessment"

@@ -1105,8 +1105,19 @@ class DiseaseClassifier:
         domain, domain_conf, domain_scores = detect_visual_domain(image)
         logger.info(f"CLIP domain detection: {domain} (conf={domain_conf:.3f})")
 
+        # Fallback to visual feature detection ONLY for non-medical detection when CLIP is unavailable
+        vf_is_non_medical = False
+        if domain in ("unknown", "ambiguous") and domain_scores.get("error"):
+            vf_domain, vf_conf, vf_scores = detect_domain_from_visual_features(image)
+            if vf_domain == "non_medical" and vf_conf >= 0.70:
+                domain = "non_medical"
+                domain_conf = vf_conf
+                domain_scores = vf_scores
+                vf_is_non_medical = True
+                logger.info(f"Visual feature fallback non-medical detection: {domain} (conf={domain_conf:.3f})")
+
         # Non-medical image detection
-        if domain == "non_medical" and domain_conf >= 0.40:
+        if domain == "non_medical" and (domain_conf >= 0.35 or vf_is_non_medical):
             logger.info("Image classified as non-medical — skipping disease models")
             return {
                 "status": "unsupported_image",
@@ -1128,7 +1139,8 @@ class DiseaseClassifier:
         if routed_category:
             routed_clean = routed_category.lower().strip()
             if routed_clean in ("skin", "xray", "retina", "general"):
-                if domain == "non_medical" and domain_conf >= 0.50:
+                if domain == "non_medical":
+                    logger.info("Non-medical image detected despite routed category override '%s'", routed_clean)
                     return {
                         "status": "unsupported_image",
                         "message": "Uploaded image appears non-medical; user-requested modality override rejected.",

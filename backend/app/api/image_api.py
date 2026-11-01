@@ -8,7 +8,7 @@ import asyncio
 import io
 import os
 from typing import Dict, Optional
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 from PIL import Image
 
@@ -285,6 +285,7 @@ async def get_diagnostics():
 
 @router.post("/api/v1/analyze-image")
 async def analyze_image(
+    request: Request,
     file: UploadFile = File(...),
     modality: Optional[str] = Form(None),
     current_user: User = Depends(get_current_user),
@@ -306,6 +307,27 @@ async def analyze_image(
                 "message": he.detail,
             },
         )
+
+    session_id = request.headers.get("X-Session-ID") if request else None
+    if session_id and current_user:
+        try:
+            from app.services.database_service import db_service
+            conv = db_service.get_conversation(session_id, current_user.id)
+            if not conv and hasattr(db_service, "get_or_create_conversation"):
+                db_service.get_or_create_conversation(session_id, current_user.id, title="Medical Image Consultation")
+            elif conv and (not conv.title or conv.title.startswith("Consultation") or conv.title == "New Consultation"):
+                conv.title = "Medical Image Consultation"
+            db_service.save_message(session_id, "user", "Uploaded medical image for clinical analysis", user_id=current_user.id)
+        except Exception as e:
+            logger.warning("Could not persist image consultation start: %s", type(e).__name__)
+
+    def _persist_assistant_msg(content: str):
+        if session_id and current_user:
+            try:
+                from app.services.database_service import db_service
+                db_service.save_message(session_id, "assistant", content, source="Vision Service", user_id=current_user.id)
+            except Exception:
+                pass
 
     image = None
     async with permit:
@@ -360,16 +382,18 @@ async def analyze_image(
 
             # ── 4. Handle 'model_unavailable' (HTTP 503) ──
             if status == "model_unavailable":
+                msg_text = prediction.get(
+                    "message",
+                    "The required AI specialist model is not currently loaded on this server.",
+                )
+                _persist_assistant_msg(f"Specialist Model Unavailable: {msg_text}")
                 return JSONResponse(
                     status_code=503,
                     content={
                         "status": "model_unavailable",
                         "success": False,
                         "category": prediction.get("category"),
-                        "message": prediction.get(
-                            "message",
-                            "The required AI specialist model is not currently loaded on this server.",
-                        ),
+                        "message": msg_text,
                         "domain_hint": prediction.get("domain_hint"),
                     },
                 )
@@ -391,6 +415,8 @@ async def analyze_image(
                 except Exception as blip_err:
                     logger.warning("BLIP captioning unavailable: %s", type(blip_err).__name__)
 
+                unsupported_desc = caption or "The uploaded image does not appear to be a supported medical image."
+                _persist_assistant_msg(f"Unsupported Image: {unsupported_desc}")
                 return JSONResponse(
                     status_code=422,
                     content={
@@ -398,7 +424,7 @@ async def analyze_image(
                         "success": False,
                         "type": "general_image",
                         "category": "non_medical",
-                        "description": caption or "The uploaded image does not appear to be a supported medical image.",
+                        "description": unsupported_desc,
                         "domain_hint": prediction.get("domain_hint", "non_medical"),
                         "domain_confidence": prediction.get("domain_confidence", 0.0),
                     },

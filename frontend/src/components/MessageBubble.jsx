@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
+import { formatMessageTimestamp } from '../utils/formatters';
 
 export default function MessageBubble({ msg, onFollowUpClick }) {
   const [isSpeaking, setIsSpeaking] = useState(false);
@@ -195,7 +196,7 @@ export default function MessageBubble({ msg, onFollowUpClick }) {
         {/* Message Footer Actions */}
         <div className="message-metadata">
           <div className="metadata-left">
-            <span className="message-timestamp">{msg.timestamp}</span>
+            <span className="message-timestamp">{formatMessageTimestamp(msg.timestamp)}</span>
             {msg.source && (
               <span className="metadata-source-pill" title={`Clinical source: ${msg.source}`}>
                 <i className="fas fa-database" />

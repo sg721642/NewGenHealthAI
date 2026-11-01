@@ -28,8 +28,8 @@ URGENT_CATEGORIES = {
             r"\b(?:heart\s+attack|myocardial\s+infarction|cardiac\s+arrest)\b",
             r"\b(?:dil\s+ka\s+daura|dil\s+ka\s+attack)\b",
             r"\bseene\s+me(?:n)?\s+(?:bahut\s+tez\s+|tez\s+|bhari\s+)?(?:dard|jalan|dabav|ghutan)\b",
-            r"\bchhati\s+me(?:n)?\s+(?:tez\s+)?dard\b",
-            r"\b(?:mera|mere|meri|apne|humare|hamare|dost|friend|bhai|pita|baap|papa|pitaji|maa|mummy|mataji|pati|patni)\b.*\b(?:heart\s+attack|dil\s+ka\s+daura|seene\s+me(?:n)?\s+dard)\b",
+            r"\bchha?ti\s+me(?:n)?\s+(?:tez\s+)?dard\b",
+            r"\b(?:mera|mere|meri|apne|humare|hamare|dost|friend|bhai|pita|baap|papa|pitaji|maa|mummy|mataji|pati|patni)\b.*\b(?:heart\s+attack|dil\s+ka\s+daura|seene\s+me(?:n)?\s+dard|chha?ti\s+me(?:n)?\s+dard)\b",
         ],
     },
     "stroke": {
@@ -44,7 +44,7 @@ URGENT_CATEGORIES = {
             r"\b(?:brain\s+hemorrhage|brain\s+stroke|cerebral\s+hemorrhage)\b",
             r"\b(?:dimag\s+ki\s+nas\s+(?:phat|fat)\s+gayi)\b",
             r"\b(?:behosh|unconscious|collapsed|fainted|loss\s+of\s+consciousness)\b",
-            r"\b(?:mera|mere|meri|apne|humare|hamare|dost|friend|bhai|pita|baap|papa|maa|mummy|pati|patni)\b.*\b(?:brain\s+hemorrhage|brain\s+stroke|stroke|behosh|unconscious)\b",
+            r"\b(?:mera|mere|meri|apne|humare|hamare|dost|friend|bhai|pita|baap|papa|maa|mummy|pati|patni)\b.*\b(?:brain\s+hemorrhage|brain\s+stroke|stroke|behosh|unconscious|paraly[sz]ed|paralysis|falij)\b",
         ],
     },
     "respiratory": {
@@ -184,14 +184,14 @@ def generate_urgent_advisory(
     # General medical emergency advisory
     if active_locale == "IN":
         emergency_contacts = (
-            "- **India National Emergency:** Call **112** (All-in-one Emergency Response: Medical, Police, Fire)\n"
+            "- **India National Emergency Service:** Call **112** (All-in-one Emergency Response: Medical, Police, Fire)\n"
             "- **Medical Ambulance Service:** Call **108** (Emergency Critical Care Ambulance where available)\n"
-            "- **National Ambulance Transport:** Call **102** (Free transport for maternal and infant care)\n"
-            "- **Other Regions / International:** Call **911** (US/Canada), **999** (UK), **112** (EU), or your local emergency number."
+            "- **Delhi CATS Ambulance / Transport:** Call **102** (Centralized Accident & Trauma Services in Delhi / Free Medical Transport)\n"
+            "- **Other Regions / International:** Call your local emergency medical service immediately, or **999** (UK), **112** (EU), **911** (US/Canada)."
         )
     else:
         emergency_contacts = (
-            "- **India: 112** (National Emergency) / **108** (Ambulance)\n"
+            "- **India: 112** (National Emergency) / **108** (Ambulance) / **102** (Delhi CATS)\n"
             "- **US and Canada: 911**\n"
             "- **UK: 999**\n"
             "- **EU: 112**\n"
@@ -235,8 +235,9 @@ def generate_delhi_emergency_guidance() -> str:
         "## 🚨 Immediate Emergency Guidance — Delhi / NCR\n\n"
         "**Your reported emergency requires immediate in-person medical dispatch. Every minute counts.**\n\n"
         "### Immediate Emergency Telephone Numbers (Delhi / NCR):\n"
-        "- **All-in-One National Emergency:** Call **112** (Delhi Police & Emergency Response Support System)\n"
-        "- **CATS Ambulance (Delhi Govt):** Call **108** / **102** (Free 24/7 Centralized Emergency Ambulance)\n"
+        "- **All-in-One National Emergency Service:** Call **112** (Delhi Police & Emergency Response Support System)\n"
+        "- **CATS Ambulance (Delhi Govt):** Call **102** (Centralized Accident & Trauma Services — Free 24/7 Delhi Emergency Ambulance)\n"
+        "- **Emergency Critical Care Ambulance:** Call **108**\n"
         "- **AIIMS Emergency Help Desk:** Call **011-26588500** / **011-26594405**\n"
         "- **Safdarjung Hospital Emergency:** Call **011-26165060**\n\n"
         "### 24x7 Emergency Departments in Delhi:\n"
@@ -245,11 +246,11 @@ def generate_delhi_emergency_guidance() -> str:
         "3. **Dr. Ram Manohar Lohia (RML) Hospital** — Baba Kharak Singh Marg, Connaught Place\n"
         "4. **Lok Nayak Jai Prakash (LNJP) Hospital** — Jawaharlal Nehru Marg, near Delhi Gate\n\n"
         "### Critical First Actions While Help Is En Route:\n"
-        "1. **Call 112 or 108 immediately** to dispatch an emergency ambulance.\n"
+        "1. **Call 112 or 102 (Delhi CATS Ambulance) immediately** to dispatch an emergency ambulance.\n"
         "2. **Do not drive yourself** or let the patient walk or exert themselves.\n"
         "3. Keep the patient in a seated or comfortable resting position and loosen tight clothing.\n"
         "4. If the person becomes unresponsive or stops breathing normally, begin chest compressions (CPR) immediately.\n\n"
-        "> **Safety Notice:** Automated tools cannot dispatch emergency vehicles or provide in-person clinical resuscitation. Call **112** or **108** right now."
+        "> **Safety Notice:** Automated tools cannot dispatch emergency vehicles or provide in-person clinical resuscitation. Call **112** or **102** right now."
     )
 
 
@@ -260,10 +261,10 @@ def generate_general_india_emergency_guidance() -> str:
         "**Your reported emergency requires immediate in-person medical dispatch. Do not wait.**\n\n"
         "### Immediate Emergency Numbers (India):\n"
         "- **National Emergency Number:** Call **112** (All-in-one Emergency Response: Medical, Police, Fire)\n"
-        "- **Emergency Medical Ambulance:** Call **108** (Critical Care Emergency Ambulance)\n"
-        "- **National Ambulance Transport:** Call **102** (Free Medical Transport)\n\n"
+        "- **Emergency Medical Ambulance:** Call **108** (Critical Care Emergency Ambulance where available)\n"
+        "- **Delhi CATS / Ambulance Transport:** Call **102** (Centralized Accident & Trauma Services in Delhi / Free Medical Transport)\n\n"
         "### Actions to Take Right Now:\n"
-        "1. **Dial 112 or 108 immediately** for an ambulance.\n"
+        "1. **Dial 112 or 108 (or 102 for Delhi CATS) immediately** for an ambulance.\n"
         "2. Go to the **nearest tertiary government or multi-specialty hospital Emergency Department (ED)**.\n"
         "3. Keep the patient resting calmly; do not let them exert themselves.\n"
         "4. Alert family members or neighbors nearby to assist with transport.\n\n"
