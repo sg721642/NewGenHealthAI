@@ -21,7 +21,7 @@
 | Phase 3B commit | `489599920066189665c1798de09488a398d3d947` |
 | Phase 4 commit | `56974f4b9319e71ecba3ba706597c55cbda54378` |
 | Phase 5 commit | `6da7d5aa02d861ffadcbbe4415a997f4f6665c9e` |
-| Phase 6 commit | Tracking on `fix/healthai-audit-premium-ui` |
+| Phase 6 commit | `5a42aec49f0ec07c3ae038512a4539ae70e35451` |
 
 | Current phase | Phase 6 — End-to-End Integration, Security Regression, Browser QA and Deployment Readiness |
 | Next phase | Phase 7 — Controlled Staging & Production Deployment |
