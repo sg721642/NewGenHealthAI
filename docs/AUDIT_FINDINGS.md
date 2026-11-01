@@ -1,7 +1,7 @@
-# NewGenHealthAI — Audit Findings (A01–A17)
+# NewGenHealthAI — Audit Findings (A01–A18)
 
 Commit audited: `1605ec87683e735857ad3c0353fa0ce8feceffbe`
-Last updated: Phase 6 (End-to-End Integration, Security Regression, Browser QA and Deployment Readiness)
+Last updated: Phase 7B (Controlled Staging Preparation, CI Hardening, and Zero-Budget Readiness)
 
 | ID | Priority | File(s) | Finding Summary | Status | Fix Phase |
 |---|---|---|---|---|---|
@@ -22,6 +22,7 @@ Last updated: Phase 6 (End-to-End Integration, Security Regression, Browser QA a
 | A15 | P2 | `eslint.config.js`, `setupTests.js`, `tailwind.config.js`, `vite.config.js`, `App.test.jsx`, `App.jsx` | ESLint lacked test/Node globals. `global` undefined in test setup. CommonJS `require` in ESM tailwind. `process` undefined in vite.config. Phase 1B resolved all React Hook ESLint warnings (0 errors, 0 warnings). Phase 6 verified 0 ESLint errors and 0 warnings across all modern components. | 🟢 Fixed | Phase 0 / Phase 1B / Phase 6 |
 | A16 | P2 | `package.json`, `logging_config.py`, `voice.py`, `App.jsx`, `test_logging.py`, `.env.example`, `README.md`, `docs/*.pdf` | Legacy names (`dr-susham-health-ai`, `susham_health`, `Dr. Susham Biswas`) eliminated from source code. Static password salt moved to external `LEGACY_PBKDF2_SALT`. Default DB path `susham_health.db` deliberately documented and preserved for backward database compatibility. Replaced `.env.example` with comprehensive 113-line configuration reference across 8 structured sections. Root `README.md` reconciled with authentic contributors (Satyam Gupta, Khagesh Ranjan, Sudipto Ghosh, Ajitesh Baghel, Yuvraj Singh). Tracked project PDFs inspected and confirmed clean of legacy branding. | 🟢 Fixed | Phase 0 / Phase 1C / Phase 4 |
 | A17 | P1 | `triage_agent.py`, `llm_agent.py`, `executor.py`, `chat_service.py`, `core/urgent_care.py`, `image_api.py` | Prompts de-escalated to automated educational intake assistant. Physician/doctor impersonation, clinical exam claims, and prescription/dosage guidance eliminated. Triage round 3 transitions to educational summary with explicit diagnostic uncertainty instead of forcing diagnosis. Strict non-persistence of failed generations. Phase 2B.1: Added India 112 emergency routing and 24/7 crisis hotlines; safe default fallback for unlisted countries without inferring country from symptoms; conservative emergency language ("may be experiencing"); explicitly acknowledged heuristic screening does not detect 100% of emergencies; hardened provenance citation URLs to HTTPS-only with markdown escaping. Phase 3A: Corrected Indian crisis services in `urgent_care.py` to verified accurate entries (Tele-MANAS 24/7 at 14416, Vandrevala Foundation 24/7 at +91 9999 666 555, iCALL with verified non-24/7 hours Mon-Sat 10:00 AM - 8:00 PM IST, 112 for danger). Hardened `get_medical_info` in `image_api.py` to present model detections as prototype findings rather than confirmed clinical diagnoses, with automatic non-disease guidance for anatomy-only and normal reference findings and strict prohibition on drug dosages. | 🟢 Fixed | Phase 2B / Phase 2B.1 / Phase 3A |
+| A18 | P1 | `.github/workflows/docker-ci.yml`, `pytest.ini`, `backend/scripts/verify_clip_routing.py` | CI logs dumped registration responses containing cleartext session bearer tokens. Container health polling loop completed normally without failing on timeout. Pytest root discovery collected standalone scripts as test fixtures. Fixed in Phase 7B: completely redacted bearer tokens in CI logs, asserted HTTP status codes and token length, enforced explicit `exit 1` on container health polling timeout, configured root `pytest.ini` (`testpaths = backend/tests`), and moved manual routing test to `backend/scripts/verify_clip_routing.py`. | 🟢 Fixed | Phase 7B |
 
 ## Section 11 Follow-up Verifications & Technical Clarifications
 
@@ -93,6 +94,25 @@ Phase 1D implemented generational versioning (`_versions`) and deletion tombston
 ### 3. Database Persistence & Ephemeral Storage Boundary
 - `backend/tests/test_phase7a_persistence.py` confirmed 100% data survival across complete database engine termination and reconnection.
 - Verified and documented that containers without a mounted persistent volume (e.g. Hugging Face Spaces `/data` volume) will lose state upon container recreation/restart.
+
+## Section 14 Phase 7B CI Hardening, Zero-Budget Protocol & Release Preparation
+
+### 1. CI Log Sanitization & Bearer Token Redaction (A18)
+- In `.github/workflows/docker-ci.yml`, the user registration response was previously dumped to stdout via `echo "Registration response: $REG_RES"`, exposing the session token in GitHub Actions runner logs.
+- Remediated by removing stdout echoing of `$REG_RES`, parsing the token silently, verifying its length without displaying the value (`echo "Synthetic user registered successfully; bearer token acquired (redacted, length: ${#TOKEN})"`), and verifying authenticated endpoints via HTTP response codes (`SESS_STATUS=200`).
+
+### 2. Readiness Polling Failure Enforcement (A18)
+- In `.github/workflows/docker-ci.yml`, the healthcheck polling loop (30 attempts with 2s sleep) completed with exit code 0 even if all attempts failed.
+- Hardened with explicit flag check: if `READY != 1` after 30 attempts (60s), the step exits immediately with code 1 (`exit 1`), preventing silent timeout bypass.
+
+### 3. Pytest Discovery & CLI Tool Isolation
+- Running pytest from root previously collected `backend/test_clip_routing.py` because its name matched `test_*.py` and lacked pytest fixtures.
+- Configured root `pytest.ini` with `testpaths = backend/tests` and relocated `backend/test_clip_routing.py` to `backend/scripts/verify_clip_routing.py`. Verified clean test collection and 310/310 passing tests.
+
+### 4. Zero-Budget Protocol & Isolation Boundary (Budget: Strictly ₹0)
+- Enforced strict project governance: 0 paid subscriptions, 0 paid hardware upgrades, 0 paid persistent storage tiers, and 0 external Hugging Face Space creations.
+- Existing production Space (`https://huggingface.co/spaces/sg721642/NewGenHealthAI`) remains 100% unmodified and untouched.
+- Staging verification is performed entirely via free GitHub Actions runners and local deterministic tooling.
 
 ## A16 Preservation Notes
 

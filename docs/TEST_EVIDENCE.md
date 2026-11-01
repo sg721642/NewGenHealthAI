@@ -1291,4 +1291,90 @@ Evaluation of all 12 model and external provider integration points:
   10. Full registration and chat creation curl roundtrip.
   11. Container logs output on failure and clean container teardown.
 
+---
+
+## Phase 7B Test Execution Summary: CI Hardening, Zero-Budget Staging Readiness & Pre-Flight Release
+
+### 1. Sanitized CI Workflow Hardening (`.github/workflows/docker-ci.yml`)
+- **Remediation**:
+  - Removed `echo "Registration response: $REG_RES"` which dumped raw bearer tokens into GitHub Actions stdout.
+  - Added silent token parsing and verified token length (`${#TOKEN}`) without exposing token value.
+  - Replaced response payload echoing with HTTP status code assertions (`SESS_STATUS=200`).
+  - Added explicit `exit 1` if container health polling loop exceeds 30 attempts (60s).
+  - Changed log collection from `if: always()` to `if: failure()`, keeping successful CI logs clean.
+- **Verification**: Verified via local syntax check, dry runs, and GitHub Actions workflow execution.
+
+### 2. Backend Regression Suite (Pytest via root `pytest.ini`)
+Command:
+```bash
+/tmp/nghai_venv/bin/pytest
+```
+Outcome:
+- **Total Tests**: 310 passed
+- **Failed**: 0
+- **Skipped**: 0
+- **Duration**: 4.68s
+- **Exit Code**: 0
+- **Modules Verified**: 23 test modules (`test_agents.py`, `test_api.py`, `test_api_edge_cases.py`, `test_app.py`, `test_auth_hardening.py`, `test_coverage_gaps.py`, `test_database.py`, `test_logging.py`, `test_phase1c1_hardening.py`, `test_phase1d_concurrency.py`, `test_phase2a_image_classifier.py`, `test_phase2b1_corrections.py`, `test_phase2b_workflow_safety.py`, `test_phase3a_image_security.py`, `test_phase3b_voice_security.py`, `test_phase4_hardening.py`, `test_phase6_multiuser_e2e.py`, `test_phase7a_persistence.py`, `test_security_ownership.py`, `test_services.py`, `test_tools.py`, `test_workflow.py`, `test_workflow_routing.py`).
+
+### 3. Frontend Vitest Integration Suite
+Command:
+```bash
+npm --prefix frontend test
+```
+Outcome:
+- **Total Tests**: 25 passed
+- **Failed**: 0
+- **Duration**: 506ms
+- **Exit Code**: 0
+
+### 4. Frontend ESLint Static Analysis
+Command:
+```bash
+npm --prefix frontend run lint
+```
+Outcome:
+- **Errors**: 0
+- **Warnings**: 0
+- **Exit Code**: 0
+
+### 5. Frontend Production Builds
+Commands:
+```bash
+npm --prefix frontend run build
+npm --prefix frontend run build:standalone
+```
+Outcome:
+- Integrated build (`backend/app/static`): 360.33 kB JS, 27.84 kB CSS — Exit code 0
+- Standalone build (`frontend/dist`): 360.33 kB JS, 27.84 kB CSS — Exit code 0
+
+### 6. Mock Visual Browser QA (`frontend/scripts/browser_qa.cjs`)
+Command:
+```bash
+node frontend/scripts/browser_qa.cjs
+```
+Outcome:
+- **Viewports Tested**: 5 (1440×900, 1280×800, 768×1024, 390×844, 320×700)
+- **Screenshots Captured**: 9
+- **Horizontal Overflow**: NO (0 overflow across all viewports)
+- **Console Errors**: 0
+- **Exit Code**: 0
+
+### 7. Real Full-Stack Browser Acceptance Suite (`frontend/scripts/fullstack_browser_qa.cjs`)
+Command:
+```bash
+node frontend/scripts/fullstack_browser_qa.cjs
+```
+Outcome:
+- **Architecture**: Real FastAPI backend + isolated SQLite DB (`/tmp/test_fullstack_phase7a.db`) + unified built React frontend
+- **Journeys Exercised**: 10 full user journeys (registration, login, chat dispatch, SQLite persistence query, session rehydration, clear confirmation, logout token revocation with 401 check, User B registration, cross-account 404 isolation, unconfigured voice/vision graceful degradation).
+- **Screenshots Captured**: 5 high-resolution full-stack screenshots in `docs/screenshots/fullstack/`.
+- **Exit Code**: 0
+
+### 8. Budget and Production Isolation Check
+- **Incurred Cost**: ₹0 ($0.00).
+- **External Spaces Created**: 0.
+- **Production Space Mutation**: NONE (100% UNTOUCHED).
+- **Staging Deployment**: Held at approval gate awaiting explicit user command.
+
 

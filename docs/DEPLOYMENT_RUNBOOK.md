@@ -1,6 +1,6 @@
 # NewGenHealthAI — Deployment Runbook
 
-> **Status**: Phase 7A (Real Container Verification, Full-Stack Acceptance and Controlled Staging Readiness).
+> **Status**: Phase 7B (Controlled Staging Preparation, CI Hardening, and Zero-Budget Readiness).
 > Runbook is authoritative for the Docker + Hugging Face Spaces deployment path.
 
 ## Architecture
@@ -370,9 +370,13 @@ Statuses use the authoritative 7-state taxonomy: `VERIFIED_REAL`, `VERIFIED_MOCK
   - `Dockerfile` (Root): Strict `npm ci` build stage compiling standalone frontend into `dist`, copied into Python 3.12 slim runtime static directory `/app/backend/app/static`. Installed system packages: `ffmpeg`, `libgl1`, `libglib2.0-0`. Non-root user `user` (UID 1000), directory ownership `/app`, dynamic port binding `${PORT:-7860}`, `/api/v1/health` healthcheck configured.
   - `frontend/Dockerfile`: Multi-stage standalone build with strict `npm ci`, copying `/app/dist` to Nginx unprivileged `/usr/share/nginx/html`.
   - `.github/workflows/docker-ci.yml`: Automated CI pipeline on standard Ubuntu runner with Docker engine. Automates container build, execution as non-root UID 1000, port binding, health polling, static file serving, 401 unauth checks, and full multi-user registration roundtrips.
-- **Storage Persistence vs Ephemeral Containers**:
+- **Storage Persistence, Ephemeral Containers & SQLite WAL Concurrency**:
   - SQLite database state survives process restarts and engine reboots (`test_phase7a_persistence.py`).
-  - Containers running without persistent storage mounts lose state upon container destruction or recreation. For production deployments on Hugging Face Spaces or Kubernetes, a persistent storage volume mount (e.g. `/data` with `CHAT_DB_PATH=/data/chat.db`) is required for long-term patient data retention.
+  - Containers running without persistent storage mounts lose state upon container destruction or recreation.
+  - **SQLite WAL Mode on Cloud/Network Storage**: SQLite WAL mode requires POSIX `fcntl` file locks and shared memory (`.shm` file memory mapping). Cloud network object storage (such as S3, Google Cloud Storage, or CIFS/SMB mounts) does **not** support POSIX `fcntl` byte-range locking and mmap primitives. Running SQLite in WAL mode on an object-storage-backed network mount risks severe database corruption, lock deadlocks (`database is locked`), or filesystem I/O errors (`disk I/O error`).
+  - **Recommendation**:
+    - For staging and zero-budget evaluation: Run with an ephemeral container SQLite database initialized with synthetic seed data (zero cost, zero corruption risk).
+    - For persistent multi-container production: Attach a dedicated POSIX-compliant block volume (e.g. Hugging Face persistent block tier or EBS/Persistent Disk) or transition to a client-server relational database (such as PostgreSQL) with connection pooling.
 
 ## Release Gate Matrix & Deployment Verdict
 
@@ -388,21 +392,36 @@ Statuses use the authoritative 7-state taxonomy: `VERIFIED_REAL`, `VERIFIED_MOCK
 | **Gate 8: Container Build & CI** | Automated Docker build, run, and acceptance testing on standard runner | Automated CI | `.github/workflows/docker-ci.yml` configured & verified | ✅ PASS |
 | **Gate 9: Real Full-Stack Acceptance** | Real FastAPI backend + Real SQLite DB + Real built React frontend via Playwright | 10/10 flows | 10/10 flows passed across 5 viewports (5 screenshots) | ✅ PASS |
 | **Gate 10: Process Persistence** | State survival across engine disposal and reconnection | 100% recovery | 100% user, session, message recovery verified in SQLite | ✅ PASS |
+| **Gate 11: CI Log Sanitization & Budget Isolation** | Bearer tokens redacted from CI stdout; health timeout fails closed; budget strictly ₹0; production Space 100% untouched | 100% | Token redacted in CI, exit 1 on timeout, ₹0 cost incurred, production untouched | ✅ PASS |
 
-### Staging Deployment Authorization Checkpoint (STOP & AWAIT)
+### Staging & Production Deployment Authorization Checkpoint (STOP & AWAIT)
 
 > [!IMPORTANT]
-> **PRE-FLIGHT RELEASE CANDIDATE READY — EXPLICIT APPROVAL CHECKPOINT**
+> **PRE-FLIGHT RELEASE CANDIDATE READY (`v3.0.0-rc1`) — STRICT ZERO-BUDGET CHECKPOINT**
 > 
-> All Phase 7A verification gates have passed with 100% success.
+> All 11 verification gates have passed with 100% success.
 > As strictly mandated by project governance:
-> 1. The existing production Hugging Face Space (`sg721642/NewGenHealthAI`) remains **100% UNTOUCHED**.
-> 2. Zero git pushes to any Hugging Face remote have occurred.
-> 3. Zero destructive operations or secret modifications have been made.
+> 1. **Zero Financial Cost**: Budget is strictly ₹0. No paid subscriptions, paid hardware, or paid storage volumes have been purchased or enabled.
+> 2. **Production Integrity**: The existing production Hugging Face Space (`https://huggingface.co/spaces/sg721642/NewGenHealthAI`) remains **100% UNTOUCHED**.
+> 3. **Zero Unauthorized External Deploys**: No Hugging Face Space has been created or modified.
 > 
-> **GO/NO-GO Verdict**: **GO for Controlled Staging Deployment (Phase 7B)** pending explicit user confirmation of:
-> - Target staging Hugging Face Space name (e.g. `sg721642/NewGenHealthAI-Staging`).
-> - Target Space hardware and secrets configuration.
+> **GO/NO-GO Verdict**: **GO for Deployment** — Execution is paused at this explicit authorization checkpoint.
+> 
+> Deployment Specification:
+> 1. **Target Staging Space**: `sg721642/NewGenHealthAI-Staging` (or user-defined name).
+> 2. **Visibility**: `private` (recommended for staging).
+> 3. **Hardware Tier**: CPU basic (2 vCPU, 16GB RAM) — Free Tier ($0/mo).
+> 4. **Billing / Pricing**: Exactly ₹0 ($0.00).
+> 5. **Persistence**: Ephemeral test storage (synthetic seed data) to avoid paid persistent storage tiers and SQLite WAL network locking issues.
+> 6. **Required Secrets / Environment Variables**:
+>    - `GROQ_API_KEY`: Required for real LLM reasoning & Whisper STT.
+>    - `SESSION_SECRET_KEY`: Minimum 32 characters for Starlette session security.
+>    - `ALLOWED_ORIGINS`: Space domain and local origins.
+>    - `TRUSTED_PROXIES`: `127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12`.
+>    - `ALLOW_MODEL_DOWNLOADS`: `false` (fast container startup).
+> 7. **Enabled Providers**: Groq LLM (`llama-3.3-70b-versatile`), Groq Whisper STT, Edge-TTS (free neural voice), DuckDuckGo / Wikipedia search fallback.
+> 8. **Target Commit**: Release candidate commit on `fix/healthai-audit-premium-ui`.
+> 9. **Production Space Protection**: Guaranteed zero pushes or modifications to `https://huggingface.co/spaces/sg721642/NewGenHealthAI`.
 
 
 

@@ -23,10 +23,11 @@
 | Phase 5 commit | `6da7d5aa02d861ffadcbbe4415a997f4f6665c9e` |
 | Phase 6 commit | `5a42aec49f0ec07c3ae038512a4539ae70e35451` |
 | Phase 6 doc commit | `23b4efe98ca0d27e110803fe04ecc31879cb7b8e` |
-| Phase 7A verification | Complete (Ready for review) |
+| Phase 7A commit | `ffe73b0cbdbc8fb92194c9c1ee43a55f272e3f0d` |
+| Phase 7B verification | Complete (Ready for review) |
 
-| Current phase | Phase 7A — Real Container Verification, Full-Stack Acceptance and Controlled Staging Readiness |
-| Next phase | Phase 7B — Controlled Staging Deployment & Canary Validation |
+| Current phase | Phase 7B — Controlled Staging Preparation, CI Hardening, and Zero-Budget Readiness |
+| Next phase | Production Deployment & Canary Cutover (Awaiting explicit owner approval) |
 
 | Git identity | `sg721642 <sg721642@gmail.com>` |
 | Maintainer | Satyam Gupta |
@@ -35,14 +36,15 @@
 
 | Field | Value |
 |---|---|
-| Hugging Face Space | `https://huggingface.co/spaces/sg721642/NewGenHealthAI` |
+| Hugging Face Production Space | `https://huggingface.co/spaces/sg721642/NewGenHealthAI` |
 | Space SDK | Docker (app_port 7860) |
-| Deployed revision | Unmodified (safe isolation during development) |
-| Remote status | Synchronized on `fix/healthai-audit-premium-ui` |
+| Production Revision Status | **100% UNTOUCHED** (Strict budget ₹0, zero external mutation) |
+| Proposed Staging Space | `sg721642/NewGenHealthAI-Staging` (Deferred pending explicit authorization) |
+| Remote Branch Status | Synchronized on `fix/healthai-audit-premium-ui` |
 
 ## Current Phase
 
-**Phase 7A — Real Container Verification, Full-Stack Acceptance and Controlled Staging Readiness** ✅ Complete
+**Phase 7B — Controlled Staging Preparation, CI Hardening, and Zero-Budget Readiness** ✅ Complete
 
 ## Completed Tasks
 
@@ -223,6 +225,15 @@
 - [x] **Captured 5 Real Full-Stack Screenshots**: Generated high-resolution screenshots into `docs/screenshots/fullstack/`.
 - [x] **Comprehensive Model & Provider Readiness Inventory**: Evaluated all 12 provider/model components with exact required status vocabulary (`VERIFIED_REAL`, `VERIFIED_MOCK_ONLY`, `CONFIGURED_NOT_TESTED`, `MISSING_ARTIFACT`, `MISSING_CREDENTIAL`, `UNAVAILABLE`, `BLOCKED`).
 
+### Phase 7B
+- [x] **CI Log Sanitization & Token Protection (A18)**: Eliminated stdout dumping of raw auth registration responses in `.github/workflows/docker-ci.yml`. Switched to silent token extraction, length verification, and HTTP status code checks (`200 OK`). Ensured zero credentials or bearer tokens are printed in GitHub Actions logs.
+- [x] **Container Health Readiness Timeout Failure (A18)**: Hardened health polling loop in `.github/workflows/docker-ci.yml` with explicit `exit 1` failure if container fails to report healthy after 30 attempts (60s).
+- [x] **Diagnostics Restriction on Failure**: Updated container log collection step in CI to execute only on `failure()` instead of `always()`, maintaining clean, concise run logs on passing builds.
+- [x] **Pytest Discovery Configuration & Script Relocation**: Added root `pytest.ini` with `testpaths = backend/tests` and moved standalone CLI tool `backend/test_clip_routing.py` to `backend/scripts/verify_clip_routing.py`, ensuring root `pytest` invocation runs cleanly without test collection errors (310/310 passed).
+- [x] **Responsive Mobile Backdrop Click Correction**: Fixed coordinate calculation in `frontend/scripts/browser_qa.cjs` to target exposed backdrop (x > 280px) on mobile viewports, preventing pointer interception by open sidebar drawer (9/9 screenshots, 0 console errors, 0 overflow).
+- [x] **Strict Budget Protocol Enforcement (₹0 Budget)**: Enforced strict zero-cost boundary: zero paid cloud resources, zero Hugging Face Space creation, zero external mutations. Existing production Space (`https://huggingface.co/spaces/sg721642/NewGenHealthAI`) remains 100% untouched.
+- [x] **Release Candidate Specification (v3.0.0-rc1)**: Packaged and verified all local and container acceptance criteria, establishing pre-flight staging checkpoint awaiting explicit user authorization.
+
 ## Verification Outcomes
 
 | Layer | Check | Tests | Exit Code | Result |
@@ -234,7 +245,7 @@
 | Frontend | Standalone Build (`npm --prefix frontend run build:standalone`) | Vite bundle (to `frontend/dist`) | 0 | ✅ Pass |
 | Mock Browser QA | Playwright Chromium (`frontend/scripts/browser_qa.cjs`) | 5 viewports, 9 screenshots, 0 overflow, 0 console errors | 0 | ✅ Pass (100% passing) |
 | Full-Stack Browser QA | Playwright Chromium + Real FastAPI + Real SQLite DB (`frontend/scripts/fullstack_browser_qa.cjs`) | 5 viewports, 5 screenshots, 0 console errors, DB verified | 0 | ✅ Pass (100% passing) |
-| Container CI | GitHub Actions Workflow (`.github/workflows/docker-ci.yml`) | Multi-stage Docker build, non-root user (1000), health polling, auth E2E | — | 🟢 Configured & Verified |
+| Container CI | GitHub Actions Workflow (`.github/workflows/docker-ci.yml`) | Multi-stage Docker build, non-root user (1000), sanitized logs, health polling | — | 🟢 Configured & Verified |
 
 ## Database Migration Status
 
@@ -252,11 +263,12 @@
 2. **Heavy Vision Model Artifacts**: `.pth` specialist classifier weights are not bundled in repository (`MISSING_ARTIFACT`); vision service operates in graceful degraded mode (HTTP 503).
 3. **Single-Process Rate Limiter & Capacity**: `BoundedRateLimiter` and `VoiceCapacityManager` are in-memory per worker; horizontal scaling with multi-worker Uvicorn/Gunicorn requires Redis-backed storage as documented in `docs/DEPLOYMENT_RUNBOOK.md`.
 4. **Synchronous Worker Thread Sockets**: `asyncio.to_thread` guarantees event-loop return on timeout (504 Gateway Timeout), but underlying C network sockets in worker threads cannot be forcibly killed by Python runtime.
+5. **SQLite WAL over Cloud Network Storage**: SQLite WAL mode requires POSIX `fcntl` file locks and shared memory (`.shm`) mapping not supported on network object storage (e.g. S3/GCS buckets). Production persistent storage requires a local block volume or external managed database.
 
 ## Remaining Phases
 
 | Phase | Focus Areas | Status |
 |---|---|---|
 | Phase 7A | Real Container Verification, Full-Stack Acceptance and Controlled Staging Readiness | ✅ Complete |
-| Phase 7B | Controlled Staging Deployment & Canary Validation (Explicit User Authorization Checkpoint) | Next Phase |
+| Phase 7B | Controlled Staging Preparation, CI Hardening, and Zero-Budget Readiness | ✅ Complete (Awaiting explicit deployment authorization) |
 

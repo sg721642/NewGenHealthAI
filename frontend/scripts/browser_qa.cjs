@@ -242,10 +242,10 @@ async function runBrowserQA() {
         qaResults.screenshotsCaptured.push('mobile_390x844_sidebar.png');
         console.log(`  Saved screenshot: mobile_390x844_sidebar.png`);
 
-        // Close sidebar drawer
+        // Close sidebar drawer by clicking the exposed backdrop area (x > 280px)
         const backdrop = await page.$('.sidebar-backdrop');
         if (backdrop) {
-          await backdrop.click();
+          await backdrop.click({ position: { x: 340, y: 200 } });
           await page.waitForTimeout(300);
         }
       }
