@@ -1,22 +1,15 @@
 """
 NewGenHealthAI — services/disease_classifier.py
 
-# Override torch version to bypass faulty security check (treats 2.11 as older than 2.6)
-try:
-    import torch
-    torch.__version__ = "2.6.1"
-except ImportError:
-    pass
-
-Multi-model disease classifier with CLIP-based domain detection and
-hard modality locking.
+Multi-model disease classifier with CLIP-based domain detection,
+lazy specialist loading, and hard modality locking.
 
 Pipeline:
 1. Use CLIP zero-shot to determine image domain (skin / xray / retina / general / non_medical)
 2. Run ONLY the matching specialist model (hard lock — no cross-contamination)
 3. Filter garbage / dataset-artifact predictions
 4. Return the top disease prediction from the specialist model
-5. Non-medical images are flagged for BLIP captioning in the API layer
+5. Non-medical images are flagged for optional captioning in the API layer
 
 Detected architectures (from inspect_models.py):
   skin    -> timm EfficientNet (conv_stem + blocks), 216 classes
@@ -26,8 +19,11 @@ Detected architectures (from inspect_models.py):
 """
 
 import os
+import threading
+from typing import Dict, Optional, Tuple
 
 import numpy as np
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -143,15 +139,25 @@ CLIP_DOMAIN_MAP = {
 
 
 def _get_clip():
-    """Lazy-load CLIP model (one-time ~600MB download)."""
+    """Lazy-load CLIP model without implicit network downloads when offline."""
     global _clip_model, _clip_processor
     if _clip_model is None:
-        from transformers import CLIPProcessor, CLIPModel
-        logger.info("Loading CLIP model for domain detection (one-time)...")
-        _clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
-        _clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
-        _clip_model.eval()
-        logger.info("CLIP model loaded successfully.")
+        try:
+            from transformers import CLIPProcessor, CLIPModel
+            from app.core.config import ALLOW_MODEL_DOWNLOADS
+
+            kwargs = {}
+            if not ALLOW_MODEL_DOWNLOADS:
+                kwargs["local_files_only"] = True
+
+            logger.info("Loading CLIP model for domain detection...")
+            _clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32", **kwargs)
+            _clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32", **kwargs)
+            _clip_model.eval()
+            logger.info("CLIP model loaded successfully.")
+        except Exception as e:
+            logger.warning("CLIP model unavailable (%s)", type(e).__name__)
+            return None, None
     return _clip_model, _clip_processor
 
 
@@ -162,6 +168,8 @@ def detect_visual_domain(image: Image.Image) -> tuple:
     """
     try:
         model, processor = _get_clip()
+        if model is None or processor is None:
+            return "unknown", 0.0, {"error": "CLIP model unavailable"}
 
         inputs = processor(
             text=CLIP_DOMAIN_PROMPTS,
@@ -215,9 +223,10 @@ def detect_visual_domain(image: Image.Image) -> tuple:
         return best_domain, best_conf, scores
 
     except Exception as e:
-        logger.error(f"CLIP domain detection error: {e}")
+        logger.error("CLIP domain detection error: %s", type(e).__name__)
         # Never silently fall back to general on CLIP failure; return unknown
-        return "unknown", 0.0, {"error": str(e)}
+        return "unknown", 0.0, {"error": type(e).__name__}
+
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -426,19 +435,40 @@ class MedicalModel:
     def load(self):
         """Load class labels and model weights, auto-detecting architecture."""
         if not os.path.exists(self.model_path):
-            logger.warning(f"[{self.model_name}] Model file not found: {self.model_path}")
+            logger.warning(f"[{self.model_name}] Model weights artifact missing")
             return False
         if not os.path.exists(self.class_path):
-            logger.warning(f"[{self.model_name}] Class file not found: {self.class_path}")
+            logger.warning(f"[{self.model_name}] Class label definition missing")
             return False
 
         try:
             self.classes = _parse_class_file(self.class_path)
             num_classes = len(self.classes)
+            if num_classes == 0:
+                logger.error(f"[{self.model_name}] Class file empty or invalid")
+                return False
             logger.info(f"[{self.model_name}] Loaded {num_classes} classes")
 
-            checkpoint = torch.load(self.model_path, map_location=self.device)
+            # Safe loading attempting weights_only=True without PyTorch version spoofing
+            checkpoint = None
+            try:
+                checkpoint = torch.load(self.model_path, map_location=self.device, weights_only=True)
+            except Exception:
+                # If weights_only fails on legacy pickled state dictionaries, attempt load without version spoofing
+                try:
+                    checkpoint = torch.load(self.model_path, map_location=self.device)
+                except Exception as inner_e:
+                    logger.error(f"[{self.model_name}] Checkpoint loading failed: %s", type(inner_e).__name__)
+                    return False
+
+            if checkpoint is None:
+                logger.error(f"[{self.model_name}] Checkpoint could not be deserialized")
+                return False
+
             state_dict, metadata = _unwrap_state_dict(checkpoint)
+            if not isinstance(state_dict, dict) or not state_dict:
+                logger.error(f"[{self.model_name}] Malformed checkpoint: state_dict is not a dictionary")
+                return False
 
             if "image_size" in metadata:
                 img_size = metadata["image_size"]
@@ -473,10 +503,9 @@ class MedicalModel:
             )
             return True
         except Exception as e:
-            logger.error(f"[{self.model_name}] Error loading model: {str(e)}")
-            import traceback
-            logger.error(traceback.format_exc())
+            logger.error(f"[{self.model_name}] Error loading model: %s", type(e).__name__)
             return False
+
 
     def predict(self, image: Image.Image):
         """Return top-5 predictions and the top confidence."""
@@ -507,37 +536,64 @@ class MedicalModel:
 # ═══════════════════════════════════════════════════════════════
 
 class DiseaseClassifier:
-    """Orchestrates multi-model disease classification with CLIP domain routing."""
+    """Orchestrates multi-model disease classification with CLIP domain routing and lazy loading."""
 
     def __init__(self):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.models = {}
+        self.models: Dict[str, MedicalModel] = {}
         self.base_dir = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models"
         )
-        self._download_models_if_missing()
+        self.model_status: Dict[str, str] = {
+            "skin": "unloaded",
+            "xray": "unloaded",
+            "retina": "unloaded",
+            "general": "unloaded",
+        }
+        self._model_load_locks: Dict[str, threading.Lock] = {
+            "skin": threading.Lock(),
+            "xray": threading.Lock(),
+            "retina": threading.Lock(),
+            "general": threading.Lock(),
+        }
+
+        from app.core.config import ALLOW_MODEL_DOWNLOADS
+        if ALLOW_MODEL_DOWNLOADS:
+            self._download_models_if_missing()
+        else:
+            logger.info("Automatic model artifact downloads disabled (ALLOW_MODEL_DOWNLOADS=false).")
+
         self.model_configs = self._discover_models()
+        for domain in ["skin", "xray", "retina", "general"]:
+            if domain in self.model_configs:
+                self.model_status[domain] = "unloaded"
+            else:
+                self.model_status[domain] = "unavailable"
 
     def _download_models_if_missing(self):
-        """Download the .pth models from a Hugging Face model repository if they don't exist locally."""
+        """Download the .pth models from a Hugging Face model repository if configured and permitted."""
+        from app.core.config import ALLOW_MODEL_DOWNLOADS
+        if not ALLOW_MODEL_DOWNLOADS:
+            logger.info("Automatic model artifact downloads disabled (ALLOW_MODEL_DOWNLOADS=false).")
+            return False
+
         repo_id = os.environ.get("HF_MODEL_REPO")
         hf_token = os.environ.get("HF_TOKEN")
 
-        # Expected filenames
+
         expected_files = {
             "skin": "skin_disease_model.pth",
             "xray": "xray_fracture_model.pth",
             "retina": "retina_model.pth",
-            "general": "general_disease_model.pth"
+            "general": "general_disease_model.pth",
         }
 
         os.makedirs(self.base_dir, exist_ok=True)
 
-        # Check if any .pth file is missing
         missing_any = False
         try:
             files = os.listdir(self.base_dir)
-            for kw, filename in expected_files.items():
+            for kw, _ in expected_files.items():
                 has_pth = any(kw in f.lower() and f.endswith(".pth") for f in files)
                 if not has_pth:
                     missing_any = True
@@ -551,25 +607,19 @@ class DiseaseClassifier:
 
         if not repo_id:
             logger.warning(
-                "WARNING: HF_MODEL_REPO environment variable is not configured. "
-                "Hugging Face model download skipped. Image classification features will be disabled/degraded."
+                "HF_MODEL_REPO environment variable is not configured. "
+                "Hugging Face model download skipped. Specialist models will be marked unavailable."
             )
             return
 
-        logger.info("Some medical model files are missing. Attempting automatic download from Hugging Face Repo: %s...", repo_id)
+        logger.info("Downloading missing model artifacts from Hugging Face Repo: %s...", repo_id)
 
         try:
             from huggingface_hub import hf_hub_download
             import shutil
 
-            repo_accessible = True
-
             for kw, filename in expected_files.items():
-                if not repo_accessible:
-                    break
-
                 dest_path = os.path.join(self.base_dir, filename)
-                # Check if it already exists to avoid re-downloading
                 try:
                     current_files = os.listdir(self.base_dir)
                 except Exception:
@@ -582,25 +632,17 @@ class DiseaseClassifier:
                             repo_id=repo_id,
                             filename=filename,
                             repo_type="model",
-                            token=hf_token
+                            token=hf_token,
                         )
                         shutil.copy(downloaded_path, dest_path)
-                        logger.info(f"[{kw}] Successfully downloaded and copied model to {dest_path}")
+                        logger.info(f"[{kw}] Successfully downloaded and copied model.")
                     except Exception as e:
-                        logger.warning(
-                            f"WARNING: Image classification model download failed from repository '{repo_id}'. "
-                            f"Reason: {e}. Image classification features will be disabled/degraded."
-                        )
-                        repo_accessible = False
+                        logger.warning(f"[{kw}] Model download failed: %s", type(e).__name__)
                         break
         except Exception as e:
-            logger.warning(
-                f"WARNING: HuggingFace model downloader initialization failed: {e}. "
-                "Image classification features will be disabled/degraded."
-            )
+            logger.warning("HuggingFace model downloader failed: %s", type(e).__name__)
 
-
-    def _discover_models(self):
+    def _discover_models(self) -> Dict[str, Dict[str, str]]:
         """Automatically find model and class files in the models directory."""
         configs = {}
         keywords = ["skin", "xray", "retina", "general"]
@@ -620,31 +662,73 @@ class DiseaseClassifier:
                         "pth": os.path.join(self.base_dir, pth_file),
                         "txt": os.path.join(self.base_dir, txt_file),
                     }
-                    logger.info(f"Discovered {kw} model: {pth_file} with {txt_file}")
+                    logger.info("Discovered %s model configuration: %s with %s", kw, pth_file, txt_file)
         except Exception as e:
-            logger.error(f"Error during model discovery: {str(e)}")
+            logger.error("Error during model discovery: %s", type(e).__name__)
 
         return configs
 
-    def initialize_models(self):
-        """Load all available models at startup."""
-        logger.info("Initializing multi-model disease classifier...")
-        for name, paths in self.model_configs.items():
-            model = MedicalModel(name, paths["pth"], paths["txt"], self.device)
+    def get_specialist_model(self, domain: str) -> Optional[MedicalModel]:
+        """
+        Lazy-load a specialist model on demand with double-checked locking stampede protection.
+        Explicitly tracks lifecycle states: unloaded -> loading -> ready | failed | unavailable.
+        """
+        # If model is already loaded or pre-injected (e.g. in test fixtures), return immediately
+        if domain in self.models and self.models[domain] is not None:
+            self.model_status[domain] = "ready"
+            return self.models[domain]
+
+        if domain not in self.model_configs:
+            self.model_status[domain] = "unavailable"
+            return None
+
+        if self.model_status.get(domain) in ("unavailable", "failed"):
+            return None
+
+
+        lock = self._model_load_locks.get(domain)
+        if not lock:
+            lock = threading.Lock()
+            self._model_load_locks[domain] = lock
+
+        with lock:
+            if self.model_status.get(domain) == "ready" and domain in self.models:
+                return self.models[domain]
+            if self.model_status.get(domain) in ("unavailable", "failed"):
+                return None
+
+            self.model_status[domain] = "loading"
+            logger.info("Lazy-loading specialist model for domain '%s'...", domain)
+            paths = self.model_configs[domain]
+            model = MedicalModel(domain, paths["pth"], paths["txt"], self.device)
             if model.load():
-                self.models[name] = model
+                self.models[domain] = model
+                self.model_status[domain] = "ready"
+                logger.info("Specialist model '%s' is now READY", domain)
+                return model
             else:
-                logger.warning(f"Skipping {name} model (failed to load)")
+                self.model_status[domain] = "failed"
+                logger.warning("Specialist model '%s' FAILED to load", domain)
+                return None
+
+    def initialize_models(self):
+        """Pre-load all discovered specialist models."""
+        logger.info("Initializing multi-model disease classifier...")
+        for name in list(self.model_configs.keys()):
+            self.get_specialist_model(name)
+        ready_models = [k for k, v in self.model_status.items() if v == "ready"]
         logger.info(
-            f"Disease classifier ready — {len(self.models)} model(s) loaded: "
-            f"{list(self.models.keys())}"
+            "Disease classifier initialization complete — %d model(s) ready: %s",
+            len(ready_models), ready_models
         )
 
-        # Pre-warm CLIP so first request isn't slow
-        try:
-            _get_clip()
-        except Exception as e:
-            logger.warning(f"CLIP pre-warm failed (will retry on first request): {e}")
+        from app.core.config import ALLOW_MODEL_DOWNLOADS
+        if ALLOW_MODEL_DOWNLOADS:
+            try:
+                _get_clip()
+            except Exception as e:
+                logger.warning("CLIP pre-warm failed: %s", type(e).__name__)
+
 
     # ── helpers ────────────────────────────────────────────────
 
@@ -1037,12 +1121,14 @@ class DiseaseClassifier:
                     }
                 target_category = routed_clean
 
-        # ── 3. HARD MODALITY LOCK: Check model availability ──
-        if target_category not in self.models:
+        # ── 3. HARD MODALITY LOCK: Check model availability with lazy loading ──
+        model = self.get_specialist_model(target_category)
+        if not model or target_category not in self.models:
             logger.warning(
-                "HARD MODALITY LOCK: Domain '%s' detected, but specialist model NOT LOADED. "
+                "HARD MODALITY LOCK: Domain '%s' detected, but specialist model NOT LOADED or failed (status=%s). "
                 "Refusing unsafe fallback to general or other models.",
-                target_category
+                target_category,
+                self.model_status.get(target_category, "unavailable"),
             )
             return {
                 "status": "model_unavailable",
@@ -1060,11 +1146,11 @@ class DiseaseClassifier:
             }
 
         # ── 4. Execute ONLY the matching specialist model ──
-        model = self.models[target_category]
         try:
             preds, raw_conf = model.predict(image)
         except Exception as e:
-            logger.error("Inference error in '%s' specialist model: %s", target_category, e)
+            logger.error("Inference error in '%s' specialist model: %s", target_category, type(e).__name__)
+
             return {
                 "status": "inconclusive",
                 "message": f"An error occurred during {target_category} model inference.",

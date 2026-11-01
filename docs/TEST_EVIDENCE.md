@@ -611,3 +611,87 @@ npm --prefix frontend run build
   - `../backend/app/static/index.html` (0.68 kB)
   - `../backend/app/static/assets/index-CB66vf3N.css` (18.46 kB)
   - `../backend/app/static/assets/index-DkjXr3wK.js` (397.18 kB)
+
+---
+
+## Phase 3A Verification Results (Secure Image Uploads, Model Loading and Resource Protection)
+
+Executed at: Phase 3A Complete
+Branch: `fix/healthai-audit-premium-ui`
+
+### 1. Full Backend Test Suite
+
+Command:
+```bash
+pytest backend/tests/ -q --tb=short
+```
+
+Outcome:
+- **Total Tests**: 256
+- **Passed**: 256
+- **Skipped**: 0
+- **Failed**: 0
+- **Duration**: 4.14s
+- **Exit Code**: 0
+
+Test Inventory by Module (19 modules):
+| Test Module | Total Tests | Passed | Skipped | Failed | Status |
+|---|---|---|---|---|---|
+| `test_agents.py` | 8 | 8 | 0 | 0 | Passed |
+| `test_api.py` | 13 | 13 | 0 | 0 | Passed |
+| `test_api_edge_cases.py` | 5 | 5 | 0 | 0 | Passed |
+| `test_app.py` | 1 | 1 | 0 | 0 | Passed |
+| `test_auth_hardening.py` | 14 | 14 | 0 | 0 | Passed |
+| `test_coverage_gaps.py` | 9 | 9 | 0 | 0 | Passed |
+| `test_database.py` | 3 | 3 | 0 | 0 | Passed |
+| `test_logging.py` | 4 | 4 | 0 | 0 | Passed |
+| `test_phase1c1_hardening.py` | 13 | 13 | 0 | 0 | Passed |
+| `test_phase1d_concurrency.py` | 15 | 15 | 0 | 0 | Passed |
+| `test_phase2a_image_classifier.py` | 36 | 36 | 0 | 0 | Passed |
+| `test_phase2b_workflow_safety.py` | 23 | 23 | 0 | 0 | Passed |
+| `test_phase2b1_corrections.py` | 28 | 28 | 0 | 0 | Passed |
+| `test_phase3a_image_security.py` | 27 | 27 | 0 | 0 | Passed |
+| `test_security_ownership.py` | 12 | 12 | 0 | 0 | Passed |
+| `test_services.py` | 11 | 11 | 0 | 0 | Passed |
+| `test_tools.py` | 12 | 12 | 0 | 0 | Passed |
+| `test_workflow.py` | 1 | 1 | 0 | 0 | Passed |
+| `test_workflow_routing.py` | 7 | 7 | 0 | 0 | Passed |
+| **Total Suite** | **256** | **256** | **0** | **0** | **Passed (100%)** |
+
+Phase 3A Regression Matrix Coverage (`test_phase3a_image_security.py`):
+| Matrix Scenario | Scenario Description & Security Guarantee | Tests | Outcome |
+|---|---|---|---|
+| **Auth Enforcement** | `/analyze-image` requires valid authentication; unauthenticated request returns HTTP 401 | `test_unauthenticated_image_upload_returns_401` | ✅ Pass |
+| **Empty File Rejection** | Zero-byte image upload rejected with HTTP 400 | `test_empty_file_upload_rejected` | ✅ Pass |
+| **Oversized Compressed File** | File exceeding `MAX_IMAGE_UPLOAD_BYTES` (5MB) rejected with HTTP 400 before decoding | `test_oversized_compressed_file_rejected` | ✅ Pass |
+| **Chunked Stream Enforcement** | Upload read in 64KB chunks; aborts immediately when cumulative size exceeds limit | `test_chunked_upload_size_enforcement` | ✅ Pass |
+| **Forged MIME Type** | Non-image files disguised with `image/jpeg` MIME header rejected via magic byte check | `test_forged_mime_type_rejected` | ✅ Pass |
+| **Unsupported Image Format** | Formats outside JPEG/PNG/WebP (e.g. BMP, TIFF, GIF, SVG) rejected with HTTP 400 | `test_unsupported_format_rejected` | ✅ Pass |
+| **Corrupt Image Bytes** | Corrupted image data rejected with HTTP 400 | `test_corrupt_image_bytes_rejected` | ✅ Pass |
+| **Truncated Image Bytes** | Incomplete/truncated stream rejected with HTTP 400 | `test_truncated_image_rejected` | ✅ Pass |
+| **Excessive Dimensions** | Image dimensions exceeding `MAX_IMAGE_DIMENSION` (4096px) rejected with HTTP 400 | `test_excessively_large_decoded_dimensions_rejected` | ✅ Pass |
+| **Decompression Bomb** | Pillow pixel count exceeding `MAX_IMAGE_PIXELS` (16MP) rejected with HTTP 400 | `test_decompression_bomb_rejected` | ✅ Pass |
+| **EXIF Metadata Stripping** | Camera EXIF, GPS, and metadata blocks completely stripped into clean RGB raster buffer | `test_exif_metadata_stripped` | ✅ Pass |
+| **Valid Small Image** | Legitimate JPEG image accepted and safely processed | `test_valid_small_image_accepted` | ✅ Pass |
+| **Per-User Concurrency Limit** | User with an active in-flight inference receives HTTP 429 on second concurrent request | `test_per_user_concurrency_limit_returns_429` | ✅ Pass |
+| **Inference Capacity Semaphore** | Global capacity exhausted (`MAX_CONCURRENT_INFERENCE=2`) returns HTTP 503 `model_unavailable` | `test_multiple_inference_requests_exceeding_capacity_returns_503` | ✅ Pass |
+| **Permit Release on Cancellation** | Client cancellation or timeout guaranteed to release capacity permit | `test_cancellation_during_inference_releases_capacity_permit` | ✅ Pass |
+| **No Implicit Model Downloads** | When `ALLOW_MODEL_DOWNLOADS=false`, classifier makes zero Hugging Face network downloads | `test_no_implicit_model_downloads_when_downloads_disabled` | ✅ Pass |
+| **Missing Weights 503** | When required model weights are missing locally, classify returns 503 `model_unavailable` | `test_model_weights_missing_returns_503_model_unavailable` | ✅ Pass |
+| **Stampede Protection** | Concurrent requests initializing the same model serialize via domain lock (`_model_load_locks`) | `test_concurrent_requests_initializing_one_model_stampede_protection` | ✅ Pass |
+| **Corrupt Checkpoint Handling** | Malformed model file fails safely into `failed` status without crashing server | `test_malformed_checkpoint_state_dict_fails_safely` | ✅ Pass |
+| **BLIP Disabled by Default** | BLIP captioning disabled by default; non-medical images receive clean fallback without download | `test_blip_disabled_by_default_no_download_and_safe_caption_fallback` | ✅ Pass |
+| **Diagnostics Privacy** | GET `/api/v1/diagnostics` does not expose `base_dir`, server paths, or device internals | `test_sensitive_diagnostics_not_publicly_exposed` | ✅ Pass |
+| **Anatomy-Only Info** | Anatomy findings generate educational anatomical guidance without disease pathology or treatments | `test_medical_info_anatomy_only_returns_no_disease_advice` | ✅ Pass |
+| **Normal Reference Info** | Normal findings generate non-pathological reference guidance without disease treatments | `test_medical_info_normal_finding_returns_no_disease_advice` | ✅ Pass |
+| **Non-Diagnostic LLM Prompt** | Medical info prompt explicitly instructs LLM that finding is NOT a clinical diagnosis | `test_medical_info_does_not_assert_confirmed_diagnosis` | ✅ Pass |
+| **Correction A: Deadline Bypass** | Synchronous fallback invoke executed in worker thread cannot bypass consultation timeout | `test_slow_synchronous_workflow_cannot_bypass_deadline_and_releases_lock` | ✅ Pass |
+| **Correction B: Indian Helplines** | Crisis guidance includes Tele-MANAS 24/7 (`14416`), Vandrevala 24/7 (`9999 666 555`), iCALL verified hours | `test_indian_crisis_helplines_accurate_tele_manas_and_icall_hours` | ✅ Pass |
+| **Correction B: Unknown Country** | Advisory provides safe fallback guidance when user country is unlisted without inferring from symptoms | `test_unknown_location_crisis_fallback` | ✅ Pass |
+
+### 2. Frontend Verification
+
+- **Vitest Integration Tests**: 11 / 11 passed (100%)
+- **ESLint Linter**: 0 errors, 0 warnings
+- **Production Build (Vite)**: Clean bundle generated (`index-DkjXr3wK.js`, `index-CB66vf3N.css`)
+

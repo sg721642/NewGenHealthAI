@@ -115,7 +115,16 @@ def check_urgent_risk(text: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def generate_urgent_advisory(category: str, title: str) -> str:
+import os
+
+DEFAULT_CRISIS_LOCALE: str = os.getenv("DEFAULT_CRISIS_LOCALE", "ALL").strip().upper()
+
+
+def generate_urgent_advisory(
+    category: str,
+    title: str,
+    locale: Optional[str] = None,
+) -> str:
     """
     Construct deterministic emergency response message.
 
@@ -124,20 +133,41 @@ def generate_urgent_advisory(category: str, title: str) -> str:
     message content. If your emergency number is not listed, call your local
     emergency services number immediately.
     """
+    active_locale = (locale or DEFAULT_CRISIS_LOCALE).upper()
+
     if category == "crisis":
+        india_block = (
+            "- **India:**\n"
+            "  - **Immediate Danger / Emergency:** Call **112** (All-in-one National Emergency Service)\n"
+            "  - **Tele-MANAS:** Call **14416** or **1800-891-4416** (24/7 Toll-free National Mental Health Helpline, Government of India)\n"
+            "  - **Vandrevala Foundation:** Call or WhatsApp **+91 9999 666 555** (24/7 Free Mental Health Counseling)\n"
+            "  - **TISS iCALL:** Call **9152987821** or **022-25521111** (Mon–Sat, 10:00 AM – 8:00 PM IST; Note: iCALL is not a 24/7 service)"
+        )
+        us_block = "- **US and Canada:** Call or text **988** (Suicide & Crisis Lifeline) or call **911**."
+        uk_block = "- **UK:** Call **111** (NHS mental health services) or **999** (immediate emergency)."
+        eu_block = "- **EU / International:** Call **112** (pan-European emergency) or your local emergency number."
+        text_lines = "- **Crisis Text Line:** Text **HOME** to **741741** (US and Canada) or **85258** (UK)."
+
+        # Order blocks according to active locale preference while retaining all references
+        if active_locale == "IN":
+            blocks = [india_block, us_block, uk_block, eu_block, text_lines]
+        elif active_locale in ("US", "CA"):
+            blocks = [us_block, india_block, uk_block, eu_block, text_lines]
+        elif active_locale == "UK":
+            blocks = [uk_block, us_block, india_block, eu_block, text_lines]
+        else:
+            # Default / unknown locale: show all major regions neutrally
+            blocks = [india_block, us_block, uk_block, eu_block, text_lines]
+
+        regional_content = "\n".join(blocks)
+
         return (
             "## 🚨 Immediate Emergency & Crisis Assistance Required\n\n"
             "**If you or someone you know is in immediate danger or experiencing thoughts of self-harm, "
             "please reach out for immediate professional support:**\n\n"
-            "- **India:** Call **iCall: 9152987821** or **Vandrevala Foundation: 1860-2662-345** (24/7). "
-            "For immediate physical danger call **112**.\n"
-            "- **US and Canada:** Call or text **988** (Suicide & Crisis Lifeline) or call **911**.\n"
-            "- **UK:** Call **111** (NHS mental health) or **999** (immediate emergency).\n"
-            "- **EU / most countries:** Call **112** (pan-European emergency) or your local emergency number.\n"
-            "- **Crisis Text Line (US/CA):** Text **HOME** to **741741**. "
-            "**Crisis Text Line (UK):** Text **85258**.\n\n"
-            "**If you are outside the regions listed above, call your local emergency telephone number immediately.**\n\n"
-            "Please speak with someone now. Support is confidential, free, and available 24/7.\n\n"
+            f"{regional_content}\n\n"
+            "**If your country or region is not listed above, dial your local emergency telephone number or visit the nearest emergency facility immediately.**\n\n"
+            "Please speak with someone now. Professional support is confidential and free.\n\n"
             "> **Safety Notice:** Automated tools cannot provide crisis intervention or emergency medical care. "
             "Emergency service numbers listed are static reference information and may not be exhaustive."
         )
@@ -164,4 +194,5 @@ def generate_urgent_advisory(category: str, title: str) -> str:
         "If you feel severely unwell, are deteriorating, or are uncertain whether this is an emergency, "
         "seek emergency care immediately — do not wait for further assessment."
     )
+
 

@@ -251,18 +251,21 @@ class ClinicalEngine:
             try:
                 async def _run_workflow() -> Dict[str, Any]:
                     if hasattr(self.workflow_app, "ainvoke"):
-                        raw_res = self.workflow_app.ainvoke(state)
-                        if hasattr(raw_res, "__await__"):
-                            return await raw_res
-                        return raw_res
-                    return self.workflow_app.invoke(state)
+                        try:
+                            raw_res = self.workflow_app.ainvoke(state)
+                            if hasattr(raw_res, "__await__"):
+                                return await raw_res
+                            return raw_res
+                        except AttributeError:
+                            logger.warning(
+                                "ClinicalEngine: ainvoke failed with AttributeError; falling back to worker thread invoke (session=%s)",
+                                session_id[:8],
+                            )
+                    # Run sync invoke in worker thread pool to avoid blocking the ASGI event loop
+                    return await asyncio.to_thread(self.workflow_app.invoke, state)
 
-                try:
-                    result = await asyncio.wait_for(_run_workflow(), timeout=_timeout)
-                except AttributeError:
-                    # Sync-only workflow fallback (LangGraph older versions)
-                    logger.warning("ClinicalEngine: falling back to sync invoke (session=%s)", session_id[:8])
-                    result = self.workflow_app.invoke(state)
+                result = await asyncio.wait_for(_run_workflow(), timeout=_timeout)
+
 
             except asyncio.TimeoutError:
                 # Deadline expired — lock is released by _LockContext.__aexit__ automatically.

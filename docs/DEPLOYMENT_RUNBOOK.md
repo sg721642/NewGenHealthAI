@@ -165,6 +165,44 @@ npm --prefix frontend run dev
 
 ---
 
+---
+
+## Image Upload Security & Resource Protection (A07, A09)
+
+### 1. Upload Sanitization & Decompression Protection (A07)
+- **Chunked Upload Streaming**: Uploads are read asynchronously in 64KB chunks up to `MAX_IMAGE_UPLOAD_BYTES` (default: 5MB). Files exceeding this threshold abort with `HTTP 400 Bad Request` before being accumulated or decompressed in memory.
+- **Magic Byte Signature Verification**: Header bytes are strictly checked for valid JPEG (`\xFF\xD8\xFF`), PNG (`\x89PNG\r\n\x1a\n`), or WebP (`RIFF....WEBP`) magic numbers. Forged MIME types, executable scripts, HTML/SVG polyglots, and corrupted images are rejected with `HTTP 400 Bad Request`.
+- **Decompression Bomb Protection**: Pillows's `MAX_IMAGE_PIXELS` (default: 16,000,000 / 16MP) and `MAX_IMAGE_DIMENSION` (default: 4096px) limits prevent zip-bomb / pixel-flood exhaustion attacks.
+- **EXIF Transposition & Metadata Stripping**: Orientation is normalized via `ImageOps.exif_transpose` and all camera metadata, GPS tags, and ICC profiles are stripped by re-encoding to a clean, isolated RGB buffer. File streams and Pillow objects are deterministically closed via `try...finally`.
+
+### 2. Inference Concurrency & Capacity Protection (A07)
+- **Global Concurrency Semaphore**: Process-local `InferenceCapacityManager` bounds concurrent heavy model inferences to `MAX_CONCURRENT_INFERENCE` (default: 2).
+- **Wait Queue Timeout**: Requests waiting longer than `INFERENCE_QUEUE_TIMEOUT_SECONDS` (default: 5.0s) fail gracefully with `HTTP 503 model_unavailable`.
+- **Per-User Concurrency Limit**: Active users are limited to 1 concurrent inference operation at a time; secondary concurrent requests return `HTTP 429 Too Many Requests`.
+- **Guaranteed Permit Release**: Asynchronous context managers guarantee capacity permits are immediately released upon client disconnection, timeout, or exception.
+
+### 3. Safe Model Lifecycle & Startup Hygiene (A09)
+- **Removal of Runtime Torch Spoofing**: Removed `torch.__version__ = "2.6.1"` runtime monkeypatch; checkpoints are loaded safely via `torch.load(..., weights_only=True)`.
+- **Lazy On-Demand Initialization**: Specialist models load on first demand rather than at application startup or module import time.
+- **Stampede / Thundering Herd Protection**: Threading locks per domain (`_model_load_locks`) prevent duplicate model loading when multiple concurrent requests arrive for an unloaded specialist.
+- **Explicit Lifecycle States**: Models transition deterministically through `unloaded` -> `loading` -> `ready` / `unavailable` / `failed`.
+- **Zero Implicit Downloads**: With `ALLOW_MODEL_DOWNLOADS=false` (default), the classifier makes no remote Hugging Face or CLIP downloads.
+- **Optional BLIP Captioning**: BLIP is disabled by default (`ENABLE_BLIP_CAPTIONING=false`); non-medical images receive generic safe fallback captions without network downloads.
+- **Sanitized Operational Diagnostics**: `GET /api/v1/diagnostics` reports high-level model readiness without exposing filesystem paths (`base_dir`), server directories, device internals, or stack traces.
+
+### 4. Configuration Reference (Phase 3A)
+| Environment Variable | Default Value | Description |
+|---|---|---|
+| `MAX_IMAGE_UPLOAD_BYTES` | `5242880` (5MB) | Maximum allowed image upload size in bytes |
+| `MAX_IMAGE_DIMENSION` | `4096` | Maximum allowed width or height in pixels |
+| `MAX_IMAGE_PIXELS` | `16000000` (16MP) | Pillow decompression bomb pixel threshold |
+| `MAX_CONCURRENT_INFERENCE` | `2` | Maximum concurrent model inferences per worker |
+| `INFERENCE_QUEUE_TIMEOUT_SECONDS` | `5.0` | Maximum wait seconds before returning HTTP 503 |
+| `ALLOW_MODEL_DOWNLOADS` | `false` | When false, blocks automatic remote model downloads |
+| `ENABLE_BLIP_CAPTIONING` | `false` | When false, disables heavy BLIP downloads |
+
+---
+
 ## Pre-deployment Verification Gates
 
 - [x] Auth isolation: cross-user session access blocked (A01/A02 verified with 35 backend tests)
@@ -192,7 +230,17 @@ npm --prefix frontend run dev
 - [x] Physician impersonation, doctor claims, and clinical exam assertions eliminated (A17 / Phase 2B)
 - [x] Forced diagnoses after round 3 and prescription dosage recommendations eliminated (A17 / Phase 2B)
 - [x] Failed generations cleanly handled with service-unavailable response and non-persistence in DB (Phase 2B)
-- [x] Complete backend test suite inventory verified (199 passed, 0 skipped, 0 failed)
+- [x] Consultation deadline bypass prevented via worker-thread execution under `asyncio.wait_for` (Correction A / Phase 3A)
+- [x] Indian crisis helplines verified accurate (Tele-MANAS 24/7 at 14416, Vandrevala 24/7, iCALL verified hours) (Correction B / Phase 3A)
+- [x] Image chunked upload, magic byte check, decompression bomb limits, EXIF stripping enforced (A07 / Phase 3A)
+- [x] Process-local inference capacity manager and per-user limits verified (A07 / Phase 3A)
+- [x] Runtime `torch.__version__` spoofing eliminated; safe `weights_only=True` loading verified (A09 / Phase 3A)
+- [x] Lazy model loading with stampede protection and explicit lifecycle states verified (A09 / Phase 3A)
+- [x] Automatic remote model downloads blocked when `ALLOW_MODEL_DOWNLOADS=false` (A09 / Phase 3A)
+- [x] Top-level BLIP downloads eliminated; safe non-medical caption fallback verified (A09 / Phase 3A)
+- [x] Operational diagnostics sanitized of server paths and internal state (A09 / Phase 3A)
+- [x] Complete backend test suite inventory verified (256 passed, 0 skipped, 0 failed)
 - [x] Frontend build clean with lint passing (0 errors, 0 warnings, 11/11 tests pass)
 - [ ] HF Space running status verified with live credentials (post-deployment)
+
 

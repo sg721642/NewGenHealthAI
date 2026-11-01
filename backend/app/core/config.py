@@ -49,3 +49,25 @@ RATE_LIMIT_LOGIN_PER_USER: int = int(os.getenv("RATE_LIMIT_LOGIN_PER_USER", "5")
 RATE_LIMIT_REGISTER_PER_IP: int = int(os.getenv("RATE_LIMIT_REGISTER_PER_IP", "5"))
 RATE_LIMIT_WINDOW_SECONDS: float = float(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60.0"))
 
+# ── Image Upload & Inference Resource Protection (A07, A09) ───────────────────
+# Configurable compressed upload limit (default: 5 MB)
+MAX_IMAGE_UPLOAD_BYTES: int = int(os.getenv("MAX_IMAGE_UPLOAD_BYTES", 5 * 1024 * 1024))
+
+# Maximum decoded image dimension and pixel count to prevent decompression bombs (16 MP default)
+MAX_IMAGE_DIMENSION: int = int(os.getenv("MAX_IMAGE_DIMENSION", "4096"))
+MAX_IMAGE_PIXELS: int = int(os.getenv("MAX_IMAGE_PIXELS", "16000000"))
+
+# Allowed image MIME and formats
+ALLOWED_IMAGE_MIMES = frozenset({"image/jpeg", "image/png", "image/webp"})
+ALLOWED_IMAGE_FORMATS = frozenset({"JPEG", "PNG", "WEBP"})
+
+# Concurrency & queue capacity for heavyweight model operations
+MAX_CONCURRENT_INFERENCE: int = int(os.getenv("MAX_CONCURRENT_INFERENCE", "2"))
+INFERENCE_QUEUE_TIMEOUT_SECONDS: float = float(
+    os.getenv("INFERENCE_QUEUE_TIMEOUT_SECONDS", "5.0")
+)
+
+# Startup / offline safety flags: default false prevents implicit multi-GB downloads
+ALLOW_MODEL_DOWNLOADS: bool = os.getenv("ALLOW_MODEL_DOWNLOADS", "false").strip().lower() == "true"
+ENABLE_BLIP_CAPTIONING: bool = os.getenv("ENABLE_BLIP_CAPTIONING", "false").strip().lower() == "true"
+

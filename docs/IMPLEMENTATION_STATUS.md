@@ -17,8 +17,9 @@
 | Phase 2A commit | `b67abedd2a69b141e450372099c186ca73e48bd6` |
 | Phase 2B commit | `0995690914b44fe496c2277c1e56181fac82a52c` |
 | Phase 2B.1 commit | `01a574a470edc880c99b6742b2bf0ae65b1ab4ec` |
+| Phase 3A commit | Pending commit |
 
-| Current phase | Phase 2B.1 — Final Workflow Reliability, Privacy and Emergency-Safety Corrections |
+| Current phase | Phase 3A — Secure Image Uploads, Model Loading and Resource Protection |
 
 | Git identity | `sg721642 <sg721642@gmail.com>` |
 | Maintainer | Satyam Gupta |
@@ -34,7 +35,8 @@
 
 ## Current Phase
 
-**Phase 2B.1 — Final Workflow Reliability, Privacy and Emergency-Safety Corrections** ✅ Complete
+**Phase 3A — Secure Image Uploads, Model Loading and Resource Protection** ✅ Complete
+
 
 ## Completed Tasks
 
@@ -130,14 +132,32 @@
 - [x] **Provenance & HTTPS-Only Citation Validation**: Enforced strict URL scheme validation in `_format_provenance_citations`, accepting only HTTPS URLs and dropping `javascript:`, `data:`, `http:`, and malformed URLs. Escaped Markdown special characters in document titles to prevent link formatting attacks.
 - [x] **Comprehensive Phase 2B.1 Regression Suite**: Added 28 new automated integration tests in `test_phase2b1_corrections.py` and updated `test_agents.py` with privacy tests (total backend suite: 229/229 passing).
 
+### Phase 3A
+- [x] **Consultation Deadline Bypass Hardening (Correction A)**: Enforced `CONSULTATION_TIMEOUT_SECONDS` (90s default) using `asyncio.to_thread` for synchronous fallback workflow invocation within `asyncio.wait_for`, guaranteeing that slow synchronous LLM/retriever calls cannot bypass the deadline or hold conversation locks.
+- [x] **Verified Indian Crisis Helplines (Correction B)**: Corrected emergency/crisis numbers in `urgent_care.py` to verified accurate services: Tele-MANAS 24/7 toll-free at `14416`, Vandrevala Foundation 24/7 at `+91 9999 666 555`, iCALL with verified non-24/7 operating hours (Mon–Sat 10:00 AM – 8:00 PM IST), and 112 for immediate danger; added configurable `locale` parameter with multi-region fallback guidance that does not infer nationality from symptoms.
+- [x] **Chunked Upload & Pre-Decode Size Enforcement (A07)**: Implemented `validate_and_read_image_upload` in `image_preprocess.py` reading in 64KB chunks and strictly aborting with HTTP 400 when upload exceeds `MAX_IMAGE_UPLOAD_BYTES` (5MB default) before accumulating or decoding large payloads in memory.
+- [x] **Strict Magic Byte & Image Format Validation (A07)**: Enforced header signature validation (`_validate_image_signature`) supporting only JPEG, PNG, and WebP, rejecting forged MIME types, non-image files, SVG, HTML polyglots, and corrupt headers.
+- [x] **Decompression Bomb & Dimension Protection (A07)**: Integrated Pillow pixel limits (`MAX_IMAGE_PIXELS=16MP` default) and maximum dimension bounds (`MAX_IMAGE_DIMENSION=4096px`), rejecting oversized or hostile image bombs with HTTP 400 prior to processing.
+- [x] **EXIF Transposition & Complete Metadata Stripping (A07)**: Safely preserved camera orientation via `ImageOps.exif_transpose` and stripped all EXIF, GPS, camera metadata, and ICC profiles by rasterizing cleanly into RGB buffers. Guaranteed deterministic resource closing via `try...finally`.
+- [x] **Process-Local Inference Capacity Manager (A07)**: Implemented bounded semaphore `InferenceCapacityManager` (`MAX_CONCURRENT_INFERENCE=2` default) with wait acquisition timeout (`INFERENCE_QUEUE_TIMEOUT_SECONDS=5.0s` -> HTTP 503 `model_unavailable`) and per-user concurrency limit (max 1 active -> HTTP 429), guaranteeing permit release on cancellation or exception.
+- [x] **Removal of Runtime Torch Version Spoofing (A09)**: Completely eliminated `torch.__version__ = "2.6.1"` hack in `disease_classifier.py`; loaded PyTorch checkpoints using `weights_only=True` without version spoofing.
+- [x] **Lazy Model Loading & Stampede Protection (A09)**: Transitioned models to lazy on-demand initialization in `get_specialist_model()`, protected by domain-specific locks (`_model_load_locks`) against thundering herd / stampede issues under concurrent traffic.
+- [x] **Explicit Model Lifecycle Tracking (A09)**: Tracked explicit states for all specialist models (`unloaded`, `loading`, `ready`, `unavailable`, `failed`) and preserved 5-state response contract (`analysis_complete`, `normal_or_negative`, `anatomy_identified`, `inconclusive`, `model_unavailable`, `unsupported_image`).
+- [x] **No Implicit Model Downloads (A09)**: Enforced `ALLOW_MODEL_DOWNLOADS` (defaults to False); prevented unverified network calls for Hugging Face `.pth` checkpoints and CLIP visual routing.
+- [x] **Removed Module-Level BLIP Downloads (A09)**: Eliminated top-level Hugging Face BLIP imports and downloads from `image_ai_service.py`; disabled BLIP by default (`ENABLE_BLIP_CAPTIONING=false`) with safe generic non-medical fallback captions.
+- [x] **Educational Medical Info Generation & Disclaimer (A17)**: Hardened `get_medical_info` in `image_api.py` to treat image detections as prototype findings rather than confirmed clinical diagnoses; added automatic non-disease guidance for anatomy-only and normal reference findings; enforced 10-second LLM timeout and strict prohibition on drug dosages.
+- [x] **Operational Diagnostics Privacy**: Sanitized `/api/v1/diagnostics` to remove `base_dir`, filesystem paths, server device internals, and stack traces.
+- [x] **Comprehensive Phase 3A Test Suite**: Added 27 new automated integration tests in `test_phase3a_image_security.py` (total backend suite: 256/256 passing, 0 skipped, 0 failed).
+
 ## Verification Outcomes
 
 | Layer | Check | Tests | Exit Code | Result |
 |---|---|---|---|---|
-| Backend | Pytest (Full 18-module suite including `test_phase2b1_corrections`, `test_phase2b_workflow_safety`, `test_phase2a_image_classifier`, `test_phase1d_concurrency`) | 229 / 229 (0 skipped) | 0 | ✅ Pass (100% passing) |
+| Backend | Pytest (Full 19-module suite including `test_phase3a_image_security`, `test_phase2b1_corrections`, `test_phase2b_workflow_safety`, `test_phase2a_image_classifier`, `test_phase1d_concurrency`) | 256 / 256 (0 skipped) | 0 | ✅ Pass (100% passing) |
 | Frontend | Vitest integration (`App.test.jsx`) | 11 / 11 | 0 | ✅ Pass (0 failures) |
 | Frontend | Linter (`npm --prefix frontend run lint`) | 0 errors, 0 warnings | 0 | ✅ Pass (100% clean) |
 | Frontend | Build (`npm --prefix frontend run build`) | Vite bundle | 0 | ✅ Pass |
+
 
 
 ## Database Migration Status
