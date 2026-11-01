@@ -389,39 +389,145 @@ Statuses use the authoritative 7-state taxonomy: `VERIFIED_REAL`, `VERIFIED_MOCK
 | **Gate 5: Browser Compatibility** | Zero horizontal overflow across 5 viewports; accessible focus traps; 0 console errors | 5/5 viewports | 5/5 viewports passed in Playwright (14 screenshots total) | ✅ PASS |
 | **Gate 6: Full Regression** | All automated tests pass cleanly across backend and frontend suites | 100% pass | 310/310 backend tests pass; 25/25 frontend tests pass | ✅ PASS |
 | **Gate 7: Static Analysis & Builds** | ESLint clean (0 errors, 0 warnings); production integrated and standalone builds | 0 errors | 0 errors, 0 warnings; both Vite builds pass | ✅ PASS |
-| **Gate 8: Container Build & CI** | Automated Docker build, run, and acceptance testing on standard runner | Automated CI | `.github/workflows/docker-ci.yml` configured & verified | ✅ PASS |
+| **Gate 8: Container Build & CI** | Automated Docker build, run, and acceptance testing on standard runner | Automated CI | `.github/workflows/docker-ci.yml` verified in CI run 41331057430 | ✅ PASS |
 | **Gate 9: Real Full-Stack Acceptance** | Real FastAPI backend + Real SQLite DB + Real built React frontend via Playwright | 10/10 flows | 10/10 flows passed across 5 viewports (5 screenshots) | ✅ PASS |
 | **Gate 10: Process Persistence** | State survival across engine disposal and reconnection | 100% recovery | 100% user, session, message recovery verified in SQLite | ✅ PASS |
 | **Gate 11: CI Log Sanitization & Budget Isolation** | Bearer tokens redacted from CI stdout; health timeout fails closed; budget strictly ₹0; production Space 100% untouched | 100% | Token redacted in CI, exit 1 on timeout, ₹0 cost incurred, production untouched | ✅ PASS |
 
+## Authoritative Separation: Verified Capabilities vs System Boundaries
+
+To ensure complete academic, legal, and engineering integrity, the platform's capabilities are explicitly separated from prototype boundaries:
+
+### 1. Verified Software Engineering Capabilities
+- **Authentication & Credential Hardening**: Memory-hard Argon2id password hashing with per-user salts, automatic PBKDF2 legacy migration rehash, 256-bit entropy bearer tokens stored only as SHA-256 hashes, configurable session expiration (24h default), and immediate token revocation on logout.
+- **Strict Multi-User Session Isolation**: Database-level ownership enforcement. Users can only access, list, update, clear, or delete their own consultations. Unauthorized cross-user requests fail closed with HTTP 404 (never leaking existence or metadata).
+- **Client-Side Request Lifecycle & Privacy**: `RequestLifecycleManager` tracks monotonic `authGeneration` and per-category `AbortController` instances across chat, image, voice, and sessions. Out-of-order responses from cancelled or switched sessions are safely discarded. Zero sensitive patient symptoms, transcripts, or queries are logged to browser console.
+- **Clinical Safety Prompt Engineering & Triage**: De-escalated from physician impersonation to automated educational intake. Emergency screening intercepts acute red flags (chest pain, stroke, suicidal ideation) and presents verified crisis hotlines (India 112, Tele-MANAS 14416, Vandrevala Foundation). Disclaimers and uncertainty markers accompany all summaries.
+- **Voice STT / TTS Pipeline**: Async Groq Whisper transcription with bounded 30s deadline; Microsoft Edge-TTS neural speech synthesis with language allowlists; strict audio file validation (500B–10MB, container magic bytes, WAV duration checks); secure tempfile isolation (`0o700` dir, `0o600` file) with deterministic cleanup.
+- **Full-Stack Browser Acceptance**: Real Chromium browser testing across 5 viewports (1440×900, 1280×800, 768×1024, 390×844, 320×700) verifying responsive navigation, zero horizontal overflow, and end-to-end database persistence.
+
+### 2. Prototype Boundaries & Non-Verified Areas
+- **Specialist Vision Model Checkpoints (`MISSING_ARTIFACT`)**:
+  - Heavy `.pth` specialist classifier weights (`skin_model.pth`, `xray_model.pth`, `retina_model.pth`, `general_model.pth`) are **not** bundled in this Git repository due to binary storage constraints.
+  - The vision service operates in a **gracefully degraded mode**: `/api/v1/diagnostics` reports status `"degraded"`, and `/api/v1/analyze-image` returns HTTP 503 `model_unavailable` with actionable guidance rather than crashing.
+- **Real External Provider Tests (vs Offline Fallbacks)**:
+  - CI and offline regression suites test fallback DAG routing, mock stubs, and deterministic response paths.
+  - Live network interaction with Groq LLM, Groq Whisper, and Tavily Search requires valid API keys and outbound internet connectivity.
+- **Absence of Clinical Validation**:
+  - NewGenHealthAI is an **educational and engineering research prototype**.
+  - It has **NOT** undergone clinical trials, formal medical device certification (e.g. FDA 510(k), CE mark under EU MDR, or IEC 62304 Software Life Cycle compliance), or institutional review board (IRB) approval.
+  - It does **NOT** provide medical diagnoses or treatment plans and must never replace qualified clinical judgment.
+- **Durable Hosted Database Storage**:
+  - The project utilizes local SQLite with Write-Ahead Logging (WAL) and the SQLite Online Backup API.
+  - Because SQLite WAL requires POSIX `fcntl` file locking and `.shm` shared memory mapping, it cannot run safely across distributed cloud object storage mounts (S3/GCS buckets) without risking corruption.
+  - For horizontally scaled multi-replica cloud production, migration to a managed relational database (e.g. PostgreSQL) is required.
+
+---
+
+## Hugging Face Spaces Deployment & Pricing Architecture
+
+### Pricing Reality: Docker Spaces on Hugging Face
+- **CPU Basic Hardware**: Hugging Face does not bill an hourly rate for CPU Basic compute ($0/hr).
+- **Docker SDK & Account Plan Constraint**: On Hugging Face, creating a **new** Space using the Docker SDK (especially private Spaces) typically requires a paid account tier (such as Hugging Face PRO at $9/month) or credit card verification on the organization/user account.
+- **Critical Clarification**: Creating a new private Docker Space on Hugging Face is **NOT guaranteed to be free ($0)** for unverified free-tier accounts.
+- **Strict Zero-Budget (₹0) Staging Strategy**:
+  - To respect a strict **₹0 budget**, **do NOT create a new Hugging Face Space**.
+  - All staging verification should be performed using free local environments or free GitHub Actions CI runners.
+  - When production release is authorized by the maintainer, the existing already-provisioned production Space (`sg721642/NewGenHealthAI`) can be updated directly without creating new Spaces or incurring additional charges.
+
+---
+
+## College Software-Project Presentation & Demonstration Guide
+
+A straightforward, reproducible local demonstration procedure requiring zero cloud costs:
+
+### 1. Zero-Cost Local Demonstration Procedure
+
+#### Step A: System Prerequisites
+- Python 3.10, 3.11, 3.12, or 3.13 installed.
+- Node.js 20+ installed.
+
+#### Step B: Quick Setup & Build (Terminal 1)
+```bash
+# 1. Clone & enter repository
+git clone https://github.com/sg721642/NewGenHealthAI.git
+cd NewGenHealthAI
+git checkout fix/healthai-audit-premium-ui
+
+# 2. Build production frontend assets
+cd frontend
+npm ci
+npm run build
+cd ..
+
+# 3. Create virtual environment & install backend dependencies
+python3 -m venv venv
+source venv/bin/activate
+pip install -r backend/requirements.txt
+```
+
+#### Step C: Launch Unified System
+```bash
+# Set synthetic test configuration (or set real GROQ_API_KEY for live LLM)
+export SESSION_SECRET_KEY="presentation_demo_secret_key_minimum_32_characters"
+export ALLOW_MODEL_DOWNLOADS="false"
+
+# Launch unified server (FastAPI serves both backend API and built Vite frontend)
+python run.py
+```
+*The application opens automatically at `http://localhost:8000` (or `http://localhost:7860`).*
+
+#### Step D: 5-Minute Presentation Demonstration Script
+1. **Introduction & Architecture (1 min)**:
+   - Highlight the modern healthcare UI/UX design system (light-first teal theme, dark mode toggle, responsive drawer navigation).
+   - Explain the decoupled architecture: React 18 frontend + FastAPI backend + LangGraph clinical workflow + SQLite WAL database.
+2. **Authentication & Security Demo (1 min)**:
+   - Register a demo account (`dr_evaluator` / `SecurePassword123!`).
+   - Demonstrate that passwords use Argon2id memory-hard hashing and bearer tokens are stored in the database exclusively as SHA-256 hashes.
+3. **Clinical Intake & Medical Safety Safeguards (1.5 min)**:
+   - Submit an educational symptom query: *"I've had a persistent dry cough and low-grade fever for three days."*
+   - Point out the medical disclaimer banner, educational triage framing, and absence of prescription drug dosages.
+   - Submit an acute emergency query: *"Sudden severe chest pain radiating to left arm and jaw."*
+   - Show the offline emergency triage intercept triggering immediately, presenting emergency hotlines (India 112, Tele-MANAS 14416) without diagnosing.
+4. **Session Management & Isolation Demo (1 min)**:
+   - Create a second consultation session via "New Conversation".
+   - Switch between conversations in the sidebar; show instant rehydration from physical SQLite records.
+   - Click "Clear Conversation" and show modal keyboard focus trapping.
+5. **Immediate Safe Logout & Token Revocation (30 sec)**:
+   - Click "Log Out"; show instantaneous client state wipe.
+   - Demonstrate that the old session token is permanently revoked (returning HTTP 401 on any replay).
+
+---
+
+## Final Release Checklist for Academic / Presentation Evaluation
+
+- [x] **Repository Integrity**: Git working tree clean; tracked files aligned; no leftover test artifacts or unmanaged tempfiles.
+- [x] **Branding & Authorship**: Author set to `Satyam Gupta <sg721642@gmail.com>`; authentic contributors documented; legacy project names eliminated.
+- [x] **Authentication & Cryptography**: Argon2id hashing active; SHA-256 token hashing; persistent `SESSION_SECRET_KEY`; rate limiting enforced.
+- [x] **Patient Privacy**: Zero bearer tokens, passwords, patient symptoms, or medical queries printed in client console or CI logs.
+- [x] **Cross-Account Isolation**: Verified User A vs User B data isolation with fail-closed HTTP 404 access denial.
+- [x] **Clinical Safety Guardrails**: Pure offline emergency screening active; physician impersonation prohibited; crisis helplines verified.
+- [x] **Accessibility & Responsiveness**: 5 responsive viewports verified in Playwright (1440×900, 1280×800, 768×1024, 390×844, 320×700) with 0 overflow; WCAG 2.1 AA keyboard focus trapping in modals.
+- [x] **Automated Testing Suite**: 310 backend pytest tests passed; 25 frontend Vitest tests passed; ESLint clean (0 errors, 0 warnings).
+- [x] **Continuous Integration**: GitHub Actions CI workflow runs automatically on standard Ubuntu runners with multi-stage Docker build, non-root execution (UID 1000), and sanitized logging.
+- [x] **Budget Compliance**: Strictly ₹0 incurred; no unauthorized external Spaces created; production Space 100% untouched.
+
+---
+
 ### Staging & Production Deployment Authorization Checkpoint (STOP & AWAIT)
 
 > [!IMPORTANT]
-> **PRE-FLIGHT RELEASE CANDIDATE READY (`v3.0.0-rc1`) — STRICT ZERO-BUDGET CHECKPOINT**
+> **FINAL RELEASE CANDIDATE READY (`v3.0.0-rc2`) — STRICT ZERO-BUDGET PROTOCOL**
 > 
 > All 11 verification gates have passed with 100% success.
-> As strictly mandated by project governance:
-> 1. **Zero Financial Cost**: Budget is strictly ₹0. No paid subscriptions, paid hardware, or paid storage volumes have been purchased or enabled.
-> 2. **Production Integrity**: The existing production Hugging Face Space (`https://huggingface.co/spaces/sg721642/NewGenHealthAI`) remains **100% UNTOUCHED**.
-> 3. **Zero Unauthorized External Deploys**: No Hugging Face Space has been created or modified.
+> - **Budget Status**: Strictly ₹0 incurred.
+> - **Production Space Status**: `https://huggingface.co/spaces/sg721642/NewGenHealthAI` remains **100% UNTOUCHED**.
+> - **External Deployment**: Awaiting explicit maintainer authorization before deploying externally.
 > 
-> **GO/NO-GO Verdict**: **GO for Deployment** — Execution is paused at this explicit authorization checkpoint.
-> 
-> Deployment Specification:
-> 1. **Target Staging Space**: `sg721642/NewGenHealthAI-Staging` (or user-defined name).
-> 2. **Visibility**: `private` (recommended for staging).
-> 3. **Hardware Tier**: CPU basic (2 vCPU, 16GB RAM) — Free Tier ($0/mo).
-> 4. **Billing / Pricing**: Exactly ₹0 ($0.00).
-> 5. **Persistence**: Ephemeral test storage (synthetic seed data) to avoid paid persistent storage tiers and SQLite WAL network locking issues.
-> 6. **Required Secrets / Environment Variables**:
->    - `GROQ_API_KEY`: Required for real LLM reasoning & Whisper STT.
->    - `SESSION_SECRET_KEY`: Minimum 32 characters for Starlette session security.
->    - `ALLOWED_ORIGINS`: Space domain and local origins.
->    - `TRUSTED_PROXIES`: `127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12`.
->    - `ALLOW_MODEL_DOWNLOADS`: `false` (fast container startup).
-> 7. **Enabled Providers**: Groq LLM (`llama-3.3-70b-versatile`), Groq Whisper STT, Edge-TTS (free neural voice), DuckDuckGo / Wikipedia search fallback.
-> 8. **Target Commit**: Release candidate commit on `fix/healthai-audit-premium-ui`.
-> 9. **Production Space Protection**: Guaranteed zero pushes or modifications to `https://huggingface.co/spaces/sg721642/NewGenHealthAI`.
+> When authorized, deployment options are:
+> 1. **Option A (Zero-Cost Local / Presentation Demo - Recommended)**: Execute `python run.py` locally or run Docker container locally. 100% free, 0 external dependencies.
+> 2. **Option B (Zero-Cost CI Container Run)**: Automated on GitHub Actions Ubuntu runner (`.github/workflows/docker-ci.yml`) on every push. 100% free under GitHub public runner quota.
+> 3. **Option C (Existing Production Space Update)**: When authorized, deploy commit directly to existing production Space (`sg721642/NewGenHealthAI`), avoiding new Space creation fees.
 
 
 

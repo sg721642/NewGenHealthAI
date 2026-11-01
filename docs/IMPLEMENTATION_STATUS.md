@@ -245,7 +245,7 @@
 | Frontend | Standalone Build (`npm --prefix frontend run build:standalone`) | Vite bundle (to `frontend/dist`) | 0 | ✅ Pass |
 | Mock Browser QA | Playwright Chromium (`frontend/scripts/browser_qa.cjs`) | 5 viewports, 9 screenshots, 0 overflow, 0 console errors | 0 | ✅ Pass (100% passing) |
 | Full-Stack Browser QA | Playwright Chromium + Real FastAPI + Real SQLite DB (`frontend/scripts/fullstack_browser_qa.cjs`) | 5 viewports, 5 screenshots, 0 console errors, DB verified | 0 | ✅ Pass (100% passing) |
-| Container CI | GitHub Actions Workflow (`.github/workflows/docker-ci.yml`) | Multi-stage Docker build, non-root user (1000), sanitized logs, health polling | — | 🟢 Configured & Verified |
+| Container CI | GitHub Actions Workflow (`.github/workflows/docker-ci.yml`) | Multi-stage Docker build, non-root user (1000), sanitized logs, verified in runs 41330625694 & 41331057430 | 0 | ✅ Pass (100% clean) |
 
 ## Database Migration Status
 
@@ -264,11 +264,13 @@
 3. **Single-Process Rate Limiter & Capacity**: `BoundedRateLimiter` and `VoiceCapacityManager` are in-memory per worker; horizontal scaling with multi-worker Uvicorn/Gunicorn requires Redis-backed storage as documented in `docs/DEPLOYMENT_RUNBOOK.md`.
 4. **Synchronous Worker Thread Sockets**: `asyncio.to_thread` guarantees event-loop return on timeout (504 Gateway Timeout), but underlying C network sockets in worker threads cannot be forcibly killed by Python runtime.
 5. **SQLite WAL over Cloud Network Storage**: SQLite WAL mode requires POSIX `fcntl` file locks and shared memory (`.shm`) mapping not supported on network object storage (e.g. S3/GCS buckets). Production persistent storage requires a local block volume or external managed database.
+6. **Hugging Face Docker Space Account Constraints**: Creating a new Space using the Docker SDK (especially private) generally requires a paid account tier (Hugging Face PRO) or payment card verification. For zero-budget (₹0) compliance, new Spaces must not be created; local demonstration (`python run.py`) or updating the existing production Space is recommended.
+7. **Educational Prototype Status (Not a Certified Medical Device)**: The application is an educational prototype. It has not undergone clinical trials or FDA/CE regulatory clearance, and cannot be used for clinical diagnosis or prescription without qualified medical oversight.
 
 ## Remaining Phases
 
 | Phase | Focus Areas | Status |
 |---|---|---|
 | Phase 7A | Real Container Verification, Full-Stack Acceptance and Controlled Staging Readiness | ✅ Complete |
-| Phase 7B | Controlled Staging Preparation, CI Hardening, and Zero-Budget Readiness | ✅ Complete (Awaiting explicit deployment authorization) |
+| Phase 7B | Controlled Staging Preparation, CI Hardening, and Zero-Budget Readiness | ✅ Complete (Release candidate v3.0.0-rc2 ready; awaiting explicit owner deployment authorization) |
 

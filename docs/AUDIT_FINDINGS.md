@@ -112,7 +112,8 @@ Phase 1D implemented generational versioning (`_versions`) and deletion tombston
 ### 4. Zero-Budget Protocol & Isolation Boundary (Budget: Strictly ₹0)
 - Enforced strict project governance: 0 paid subscriptions, 0 paid hardware upgrades, 0 paid persistent storage tiers, and 0 external Hugging Face Space creations.
 - Existing production Space (`https://huggingface.co/spaces/sg721642/NewGenHealthAI`) remains 100% unmodified and untouched.
-- Staging verification is performed entirely via free GitHub Actions runners and local deterministic tooling.
+- Clarified Hugging Face Spaces pricing model: while CPU Basic compute incurs no hourly charge ($0/hr), creating a new Space with the Docker SDK generally requires a paid account plan (such as HF PRO at $9/mo) or payment card verification; creating a new private Docker staging Space cannot be characterized as guaranteed free ($0).
+- Zero-cost verification and presentation workflows are executed via local deployment (`python run.py`) or free public GitHub Actions runners (`ubuntu-latest`).
 
 ## A16 Preservation Notes
 
