@@ -3,11 +3,23 @@ NewGenHealthAI — tools/llm_client.py
 Groq LLM client singleton with multi-model fallback resilience.
 """
 
-from typing import Any, List, Optional
+import time
+from typing import Any, Dict, List, Optional
 from app.core.config import GROQ_API_KEY, GROQ_CHAT_MODEL, GROQ_FALLBACK_MODELS
 from app.core.logging_config import logger
 
 _cached_llms = {}
+_readiness_cache: Dict[str, Any] = {
+    "checked_at": 0.0,
+    "ready": False,
+    "status": "uninitialized",
+    "detail": "",
+}
+_last_invocation_outcome: Dict[str, Any] = {
+    "timestamp": 0.0,
+    "success": None,
+    "error": None,
+}
 
 
 def get_llm(
@@ -69,6 +81,9 @@ def invoke_llm_with_fallback(
             if not llm:
                 continue
             response = llm.invoke(prompt)
+            _last_invocation_outcome["timestamp"] = time.time()
+            _last_invocation_outcome["success"] = True
+            _last_invocation_outcome["error"] = None
             return response
         except Exception as e:
             last_error = e
@@ -93,5 +108,105 @@ def invoke_llm_with_fallback(
                 )
 
     if last_error:
+        _last_invocation_outcome["timestamp"] = time.time()
+        _last_invocation_outcome["success"] = False
+        _last_invocation_outcome["error"] = f"{type(last_error).__name__}: {str(last_error)[:100]}"
         logger.error("All candidate Groq models exhausted. Last error: %s", last_error)
     return None
+
+
+def check_ai_provider_readiness(
+    ttl_seconds: float = 60.0,
+    force_refresh: bool = False,
+) -> Dict[str, Any]:
+    """
+    Low-cost, bounded, cached readiness probe for Groq AI provider.
+    Zero token expense: checks recent invocation health or probes models.list().
+    Never exposes credentials or API keys.
+    """
+    if not GROQ_API_KEY or not GROQ_API_KEY.strip():
+        return {
+            "ready": False,
+            "status": "missing_api_key",
+            "detail": "GROQ_API_KEY not configured",
+        }
+
+    now = time.time()
+
+    # 1. Check if recent invocation outcome occurred within ttl
+    if _last_invocation_outcome["timestamp"] > 0:
+        age = now - _last_invocation_outcome["timestamp"]
+        if age < ttl_seconds:
+            if _last_invocation_outcome["success"] is True:
+                _readiness_cache.update({
+                    "checked_at": now,
+                    "ready": True,
+                    "status": "operational",
+                    "detail": "Recent invocation successful",
+                })
+                return {
+                    "ready": True,
+                    "status": "operational",
+                    "detail": "Recent invocation successful",
+                }
+            elif _last_invocation_outcome["success"] is False:
+                _readiness_cache.update({
+                    "checked_at": now,
+                    "ready": False,
+                    "status": "degraded",
+                    "detail": _last_invocation_outcome["error"] or "Recent invocation failed",
+                })
+                return {
+                    "ready": False,
+                    "status": "degraded",
+                    "detail": _last_invocation_outcome["error"] or "Recent invocation failed",
+                }
+
+    # 2. Return cached readiness if within ttl and not forced
+    if (
+        not force_refresh
+        and (now - _readiness_cache["checked_at"] < ttl_seconds)
+        and _readiness_cache["status"] != "uninitialized"
+    ):
+        return {
+            "ready": _readiness_cache["ready"],
+            "status": _readiness_cache["status"],
+            "detail": _readiness_cache["detail"],
+        }
+
+    # 3. Perform low-cost bounded probe via Groq SDK models.list() (zero token cost)
+    try:
+        from groq import Groq
+
+        client = Groq(api_key=GROQ_API_KEY, timeout=3.0)
+        _ = client.models.list()
+        _readiness_cache.update({
+            "checked_at": now,
+            "ready": True,
+            "status": "operational",
+            "detail": "Provider reachable and authenticated",
+        })
+        return {
+            "ready": True,
+            "status": "operational",
+            "detail": "Provider reachable and authenticated",
+        }
+    except Exception as e:
+        err_type = type(e).__name__
+        err_msg = str(e)[:100]
+        safe_detail = f"{err_type}: {err_msg}"
+        if GROQ_API_KEY and GROQ_API_KEY in safe_detail:
+            safe_detail = safe_detail.replace(GROQ_API_KEY, "[REDACTED]")
+
+        _readiness_cache.update({
+            "checked_at": now,
+            "ready": False,
+            "status": "provider_unreachable",
+            "detail": safe_detail,
+        })
+        return {
+            "ready": False,
+            "status": "provider_unreachable",
+            "detail": safe_detail,
+        }
+

@@ -86,3 +86,42 @@ def test_triage_to_executor_round_limit():
     assert state["triage_status"] == "ready_to_diagnose"
     assert "educational assessment" in state["question"]
     assert _route_after_triage(state) in ("retriever", "llm_agent")
+
+
+def test_ai_readiness_probe_missing_key():
+    """When GROQ_API_KEY is missing, readiness returns ready=False and missing_api_key."""
+    from app.tools.llm_client import check_ai_provider_readiness
+    with patch("app.tools.llm_client.GROQ_API_KEY", ""):
+        res = check_ai_provider_readiness(force_refresh=True)
+        assert res["ready"] is False
+        assert res["status"] == "missing_api_key"
+
+
+def test_ai_readiness_probe_success():
+    """When Groq models.list succeeds, readiness returns ready=True and operational."""
+    from app.tools.llm_client import check_ai_provider_readiness
+    with patch("app.tools.llm_client.GROQ_API_KEY", "gsk_test1234567890"):
+        with patch("groq.Groq") as mock_groq_cls:
+            mock_client = MagicMock()
+            mock_client.models.list.return_value = MagicMock(data=[])
+            mock_groq_cls.return_value = mock_client
+            res = check_ai_provider_readiness(force_refresh=True)
+            assert res["ready"] is True
+            assert res["status"] == "operational"
+
+
+def test_ai_readiness_probe_failure_sanitization():
+    """When Groq raises an error, readiness returns ready=False and redacts any key."""
+    from app.tools.llm_client import check_ai_provider_readiness
+    secret_key = "gsk_secret_should_never_leak"
+    with patch("app.tools.llm_client.GROQ_API_KEY", secret_key):
+        with patch("groq.Groq") as mock_groq_cls:
+            mock_client = MagicMock()
+            mock_client.models.list.side_effect = RuntimeError(f"Connection refused with key {secret_key}")
+            mock_groq_cls.return_value = mock_client
+            res = check_ai_provider_readiness(force_refresh=True)
+            assert res["ready"] is False
+            assert res["status"] == "provider_unreachable"
+            assert secret_key not in res["detail"]
+            assert "[REDACTED]" in res["detail"]
+
