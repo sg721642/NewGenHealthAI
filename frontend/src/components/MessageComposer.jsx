@@ -377,7 +377,7 @@ export default function MessageComposer({
         <div className="composer-clinical-hint">
           <i className="fas fa-shield-halved" />
           <span>
-            AI responses are informational only — always consult a qualified healthcare professional. Call 112 / 911 in emergencies.
+            AI responses are informational only — always consult a qualified healthcare professional. Call 112 / 108 in emergencies.
           </span>
         </div>
       </div>

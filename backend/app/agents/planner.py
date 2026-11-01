@@ -7,6 +7,7 @@ force is_medical_query=True so the user's follow-up answers stay
 in the triage flow instead of being treated as a new query.
 """
 
+import re
 from app.core.state import AgentState
 from app.core.urgent_care import check_urgent_risk
 
@@ -19,7 +20,7 @@ MEDICAL_KEYWORDS = [
     "joint pain", "muscle pain", "fatigue", "weakness", "dizziness",
     "confusion", "memory loss", "seizure", "numbness", "tingling", "swelling",
     "bleeding", "bruising", "weight loss", "weight gain",
-    "appetite loss", "sleep problems", "insomnia",
+    "appetite loss", "sleep problems", "insomnia", "chills", "sore throat",
     # Conditions
     "cancer", "diabetes", "hypertension", "heart disease", "stroke", "asthma",
     "copd", "pneumonia", "bronchitis", "covid", "coronavirus",
@@ -40,11 +41,17 @@ MEDICAL_KEYWORDS = [
     # Severity / duration words (patient answers)
     "mild", "moderate", "severe", "throbbing", "sharp", "dull",
     "chronic", "recurring", "worse", "better", "days", "weeks", "hours",
+    "yesterday", "today", "constant", "intermittent", "gradual", "sudden",
+]
+
+GENERAL_KNOWLEDGE_PATTERNS = [
+    re.compile(r"^(?:what\s+(?:is|are)|explain|tell\s+me\s+about|define|how\s+does|how\s+do|causes?\s+of)\b", re.IGNORECASE),
+    re.compile(r"\b(?:what\s+(?:is|are)|difference\s+between|overview\s+of)\b", re.IGNORECASE),
 ]
 
 
 def PlannerAgent(state: AgentState) -> AgentState:
-    """Decide whether to route to urgent escalation, RAG retriever, or direct LLM."""
+    """Decide whether to route to urgent escalation, symptom triage, RAG retriever, or direct LLM."""
     raw_question = state.get("question", "")
 
     # 1. First-priority check: acute emergency red flags
@@ -61,18 +68,32 @@ def PlannerAgent(state: AgentState) -> AgentState:
         state["retry_count"] = 0
         return state
 
-    question = raw_question.lower()
+    question = raw_question.lower().strip()
     triage_round = state.get("triage_round", 0)
+    has_collected = bool(state.get("collected_symptoms"))
 
-    # If we're already in a triage session, this is a follow-up answer
-    # → Force medical query so triage continues asking questions
-    if triage_round > 0:
+    # 2. If we're already in a triage session or have collected symptoms,
+    # this reply is a follow-up answer (e.g. "For 7 days", "Moderate", "1-3 days")
+    if triage_round > 0 or has_collected:
         state["current_tool"] = "retriever"
         state["is_medical_query"] = True
         state["retry_count"] = 0
         return state
 
+    # 3. Check for general educational queries (e.g., "What is diabetes?")
+    # These should bypass symptom intake and receive direct educational answers.
+    is_general_info = any(p.search(question) for p in GENERAL_KNOWLEDGE_PATTERNS)
     contains_medical = any(kw in question for kw in MEDICAL_KEYWORDS)
+
+    if is_general_info and contains_medical:
+        # Route to RAG/LLM directly, bypass multi-round triage
+        state["current_tool"] = "retriever"
+        state["is_medical_query"] = True
+        state["triage_status"] = "ready_to_diagnose"
+        state["retry_count"] = 0
+        return state
+
+    # 4. Standard symptom query or non-medical query
     state["current_tool"] = "retriever" if contains_medical else "llm_agent"
     state["is_medical_query"] = contains_medical
     state["retry_count"] = 0

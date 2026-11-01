@@ -17,6 +17,7 @@ Result-State Taxonomy (internal, not transmitted verbatim):
 
 import asyncio
 import os
+import re
 from collections import OrderedDict
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
@@ -169,9 +170,15 @@ class ClinicalEngine:
         messages = db_service.get_chat_history(session_id, user_id=user_id)
         if messages:
             valid_history = []
+            collected_symptoms = []
+            questions_asked = []
+            triage_round = 0
+            has_subsequent_assessment = False
+
             for msg in messages:
                 content = (msg.get("content") or "").strip()
                 role = msg.get("role", "")
+                source = msg.get("source", "")
                 if not content:
                     continue
                 # Exclude failed or error responses from rehydrated context
@@ -183,14 +190,39 @@ class ClinicalEngine:
                     or "service is currently unable" in content.lower()
                 ):
                     continue
-                valid_history.append({"role": role, "content": content})
+                valid_history.append({"role": role, "content": content, "source": source})
+
+                if role == "user":
+                    collected_symptoms.append(content)
+                elif role == "assistant":
+                    if source == "Clinical Triage":
+                        triage_round += 1
+                        q_match = re.search(r"\*\*(.*?)\*\*", content)
+                        if q_match:
+                            questions_asked.append(q_match.group(1).strip())
+                        else:
+                            questions_asked.append(content)
+                    elif "Educational" in source or "Assessment" in source:
+                        has_subsequent_assessment = True
+
+            # If an assessment was already delivered, previous triage is completed
+            if has_subsequent_assessment:
+                triage_round = 0
+                collected_symptoms = []
+                questions_asked = []
 
             # Bound history to last MAX_RESTORE_TURNS
             if len(valid_history) > self.MAX_RESTORE_TURNS:
                 valid_history = valid_history[-self.MAX_RESTORE_TURNS:]
 
             state["conversation_history"] = valid_history
-            logger.info("Rehydrated %d history turns for session %s, user %s", len(valid_history), session_id[:8], user_id)
+            state["triage_round"] = min(triage_round, 3)
+            state["collected_symptoms"] = collected_symptoms
+            state["questions_asked"] = questions_asked
+            logger.info(
+                "Rehydrated %d history turns (triage_round=%d, collected=%d) for session %s, user %s",
+                len(valid_history), state["triage_round"], len(collected_symptoms), session_id[:8], user_id
+            )
 
         self.conversation_states[memory_key] = state
         return state

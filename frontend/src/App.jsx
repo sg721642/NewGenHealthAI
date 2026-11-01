@@ -39,6 +39,7 @@ export default function App() {
   const [showWelcome, setShowWelcome] = useState(true);
   const [isTyping, setIsTyping] = useState(false);
   const [inputValue, setInputValue] = useState('');
+  const [aiReady, setAiReady] = useState(true);
 
   // UI state
   const [toast, setToast] = useState({ show: false, message: '', type: 'success' });
@@ -97,6 +98,24 @@ export default function App() {
     document.documentElement.setAttribute('data-theme', theme);
     localStorage.setItem('theme', theme);
   }, [theme]);
+
+  // Check backend AI readiness
+  useEffect(() => {
+    let mounted = true;
+    fetch('/api/v1/health')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (mounted && data) {
+          setAiReady(Boolean(data.ai_ready));
+        }
+      })
+      .catch(() => {
+        /* ignore network failure */
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const toggleTheme = useCallback(() => {
     setTheme((prev) => (prev === 'light' ? 'dark' : 'light'));
@@ -345,12 +364,19 @@ export default function App() {
           revokeAllObjectURLs();
           setCurrentSessionId(sessionId);
           currentSessionIdRef.current = sessionId;
-          const msgs = (data.messages || []).map((m) => ({
-            type: m.role === 'user' ? 'user' : 'assistant',
-            content: m.content,
-            timestamp: m.timestamp || '',
-            source: m.source || null,
-          }));
+          const msgs = (data.messages || []).map((m, idx, arr) => {
+            let followUp = m.follow_up || m.followUp || null;
+            if (!followUp && data.follow_up && idx === arr.length - 1 && m.role === 'assistant') {
+              followUp = data.follow_up;
+            }
+            return {
+              type: m.role === 'user' ? 'user' : 'assistant',
+              content: m.content,
+              timestamp: m.timestamp || '',
+              source: m.source || null,
+              followUp,
+            };
+          });
           setMessages(msgs);
           setChatHistory(msgs.map((m) => ({ ...m })));
           setShowWelcome(false);
@@ -915,6 +941,7 @@ export default function App() {
             onToggleTheme={toggleTheme}
             user={user}
             onLogout={handleLogout}
+            aiReady={aiReady}
           />
 
           {/* Main Clinical Workspace */}

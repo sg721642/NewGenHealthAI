@@ -15,24 +15,15 @@ from typing import Any, Dict, List, Optional
 
 from app.core.logging_config import logger
 from app.core.state import AgentState
-from app.core.config import GROQ_API_KEY
+from app.core.config import GROQ_API_KEY, GROQ_TRIAGE_MODEL, GROQ_FALLBACK_MODELS
+from app.tools.llm_client import invoke_llm_with_fallback, get_llm
 
 MAX_TRIAGE_ROUNDS = 3
 
 
 def _get_triage_llm():
     """Return a high-temperature Groq LLM specifically for dynamic triage."""
-    try:
-        from langchain_groq import ChatGroq
-        return ChatGroq(
-            api_key=GROQ_API_KEY,
-            model_name="llama-3.3-70b-versatile",
-            temperature=0.7,   # Higher temp = more varied, less predictable questions
-            max_tokens=1024,
-        )
-    except Exception as e:
-        logger.error("Triage LLM init failed: %s", str(e))
-        return None
+    return get_llm(model_name=GROQ_TRIAGE_MODEL, temperature=0.7, max_tokens=1024)
 
 
 def _extract_json(text: str) -> Optional[Dict]:
@@ -41,6 +32,9 @@ def _extract_json(text: str) -> Optional[Dict]:
         return None
 
     cleaned_text = text.strip()
+
+    # Strip thinking tokens if present (e.g. from reasoning models like Qwen or DeepSeek)
+    cleaned_text = re.sub(r"<think>[\s\S]*?</think>", "", cleaned_text).strip()
 
     # 1. Direct parse attempt
     try:
@@ -95,11 +89,6 @@ def TriageAgent(state: AgentState) -> AgentState:
         logger.info("Triage: non-medical query — skipping")
         return state
 
-    llm = _get_triage_llm()
-    if not llm:
-        state["triage_status"] = "ready_to_diagnose"
-        return state
-
     raw_question = state.get("question", "")
     question = raw_question.strip() if isinstance(raw_question, str) else ""
 
@@ -115,6 +104,12 @@ def TriageAgent(state: AgentState) -> AgentState:
     # Transition to assessment after MAX rounds without forced diagnosis
     if triage_round >= MAX_TRIAGE_ROUNDS:
         logger.info("Triage: max rounds reached (%d) — transitioning to educational assessment", MAX_TRIAGE_ROUNDS)
+        state["triage_status"] = "ready_to_diagnose"
+        state["question"] = _build_enriched_question(collected)
+        return state
+
+    llm = _get_triage_llm()
+    if not llm:
         state["triage_status"] = "ready_to_diagnose"
         state["question"] = _build_enriched_question(collected)
         return state
@@ -201,15 +196,38 @@ If enough information gathered:
   "options": []
 }}"""
 
+    candidate_models = [GROQ_TRIAGE_MODEL] + [m for m in GROQ_FALLBACK_MODELS if m != GROQ_TRIAGE_MODEL]
     try:
-        response = llm.invoke(triage_prompt)
-        answer = (
-            response.content.strip()
-            if hasattr(response, "content")
-            else str(response).strip()
-        )
+        if llm is not None:
+            try:
+                response = llm.invoke(triage_prompt)
+            except Exception as e:
+                err_msg = str(e)
+                if any(w in err_msg.lower() for w in ["404", "not found", "decommissioned", "deprecated", "does not exist"]):
+                    response = invoke_llm_with_fallback(
+                        triage_prompt,
+                        candidate_models=candidate_models,
+                        temperature=0.7,
+                        max_tokens=1024,
+                    )
+                else:
+                    raise
+        else:
+            response = invoke_llm_with_fallback(
+                triage_prompt,
+                candidate_models=candidate_models,
+                temperature=0.7,
+                max_tokens=1024,
+            )
+        answer = ""
+        if response is not None:
+            answer = (
+                response.content.strip()
+                if hasattr(response, "content")
+                else str(response).strip()
+            )
 
-        parsed = _extract_json(answer)
+        parsed = _extract_json(answer) if answer else None
 
         if not parsed:
             logger.warning("Triage: couldn't parse JSON — defaulting to ready_to_diagnose")
@@ -221,6 +239,18 @@ If enough information gathered:
         question_text = parsed.get("question_text", "").strip()
         options = parsed.get("options", [])
         acknowledgment = (parsed.get("acknowledgment") or parsed.get("doctor_response") or "").strip()
+
+        # Check for repetition against questions already asked
+        if status == "needs_info" and question_text:
+            is_repeat = any(question_text.lower() in q.lower() or q.lower() in question_text.lower() for q in questions_asked)
+            if is_repeat:
+                logger.warning("Triage: question repeated — generating non-repeat clinical fallback")
+                fallback = _get_fallback_triage_question(triage_round, question, collected, questions_asked)
+                if fallback:
+                    question_text = fallback["question_text"]
+                    options = fallback["options"]
+                    if fallback.get("acknowledgment"):
+                        acknowledgment = fallback["acknowledgment"]
 
         if status == "needs_info" and question_text:
             state["triage_status"] = "needs_info"
@@ -255,11 +285,66 @@ If enough information gathered:
             logger.info("Triage: sufficient symptom details — proceeding to educational assessment")
 
     except Exception as e:
-        logger.error("Triage: LLM call failed (%s)", type(e).__name__)
-        state["triage_status"] = "ready_to_diagnose"
-        state["question"] = _build_enriched_question(collected)
+        logger.error("Triage: process exception (%s): %s", type(e).__name__, str(e)[:120])
+        fallback = _get_fallback_triage_question(triage_round, question, collected, questions_asked)
+        if fallback and triage_round < MAX_TRIAGE_ROUNDS:
+            question_text = fallback["question_text"]
+            options = fallback["options"]
+            ack = fallback["acknowledgment"]
+            state["triage_status"] = "needs_info"
+            state["triage_round"] = triage_round + 1
+            questions_asked.append(question_text)
+            state["questions_asked"] = questions_asked
+            state["generation"] = f"{ack}\n\n**{question_text}**"
+            state["source"] = "Clinical Triage"
+            state["follow_up_data"] = {
+                "questions": [{"text": question_text, "options": options[:5]}],
+                "triage_round": triage_round + 1,
+                "max_rounds": MAX_TRIAGE_ROUNDS,
+            }
+        else:
+            state["triage_status"] = "ready_to_diagnose"
+            state["question"] = _build_enriched_question(collected)
 
     return state
+
+
+def _get_fallback_triage_question(
+    triage_round: int,
+    question: str,
+    collected: List[str],
+    questions_asked: List[str],
+) -> Optional[Dict[str, Any]]:
+    """Deterministic, clinically structured fallback questions aligned with medical project specifications."""
+    if triage_round >= MAX_TRIAGE_ROUNDS:
+        return None
+
+    # Check which clinical axes have already been asked
+    has_duration_asked = any("how many days" in q.lower() or "how long" in q.lower() or "duration" in q.lower() for q in questions_asked)
+    has_severity_asked = any("severe" in q.lower() or "severity" in q.lower() or "temperature" in q.lower() for q in questions_asked)
+
+    if triage_round == 0 or not has_duration_asked:
+        return {
+            "status": "needs_info",
+            "acknowledgment": "I understand you are experiencing this symptom. To help you prepare for a consultation with a healthcare professional, let's clarify a few details.",
+            "question_text": "How long have you been experiencing this, and did it begin suddenly or gradually?",
+            "options": ["Less than 24 hours", "1–3 days", "4–7 days", "More than a week"],
+        }
+    elif triage_round == 1 or not has_severity_asked:
+        return {
+            "status": "needs_info",
+            "acknowledgment": "Thank you for providing that timeframe. Duration is an essential detail for your doctor.",
+            "question_text": "How severe would you describe this symptom, or is it accompanied by a high temperature or chills?",
+            "options": ["Mild / manageable", "Moderate", "Severe / throbbing", "Fluctuates throughout the day"],
+        }
+    elif triage_round == 2:
+        return {
+            "status": "needs_info",
+            "acknowledgment": "Thank you for sharing that context. One final check on related symptoms before summarizing.",
+            "question_text": "Are you experiencing any associated symptoms such as chills, body aches, nausea, or shortness of breath?",
+            "options": ["Chills & body aches", "Nausea or headache", "Cough & sore throat", "None of these"],
+        }
+    return None
 
 
 def _build_enriched_question(collected: List[str]) -> str:

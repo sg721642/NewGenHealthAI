@@ -6,7 +6,7 @@ Enhanced with better prompting for comprehensive medical responses.
 
 from app.core.logging_config import logger
 from app.core.state import AgentState
-from app.tools.llm_client import get_llm
+from app.tools.llm_client import get_llm, invoke_llm_with_fallback
 
 
 def LLMAgent(state: AgentState) -> AgentState:
@@ -76,12 +76,24 @@ def LLMAgent(state: AgentState) -> AgentState:
         )
 
     try:
-        response = llm.invoke(prompt)
-        answer = (
-            response.content.strip()
-            if hasattr(response, "content")
-            else str(response).strip()
-        )
+        if llm is not None:
+            try:
+                response = llm.invoke(prompt)
+            except Exception as e:
+                err_msg = str(e)
+                if any(w in err_msg.lower() for w in ["404", "not found", "decommissioned", "deprecated", "does not exist"]):
+                    response = invoke_llm_with_fallback(prompt, temperature=0.3, max_tokens=2048)
+                else:
+                    raise
+        else:
+            response = invoke_llm_with_fallback(prompt, temperature=0.3, max_tokens=2048)
+        answer = ""
+        if response is not None:
+            answer = (
+                response.content.strip()
+                if hasattr(response, "content")
+                else str(response).strip()
+            )
 
         if answer and len(answer) > 10:
             state["generation"] = answer

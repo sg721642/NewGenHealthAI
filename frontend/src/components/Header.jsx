@@ -10,6 +10,7 @@ export default function Header({
   onDownloadChat,
   user,
   onLogout,
+  aiReady = true,
 }) {
   const [isFullscreen, setIsFullscreen] = useState(false);
 
@@ -46,9 +47,12 @@ export default function Header({
         <div className="header-title-block">
           <div className="header-title-row">
             <span className="header-main-title">Medical AI Assistant</span>
-            <span className="clinical-status-badge" title="AI assistant is active for informational intake">
-              <span className="status-dot online" />
-              <span>AI Ready</span>
+            <span
+              className={`clinical-status-badge ${aiReady ? 'status-ready' : 'status-degraded'}`}
+              title={aiReady ? "AI assistant is active for informational intake" : "AI service degraded or key pending"}
+            >
+              <span className={`status-dot ${aiReady ? 'online' : 'offline'}`} />
+              <span>{aiReady ? "AI Ready" : "AI Offline"}</span>
             </span>
           </div>
           {currentSessionTitle && (

@@ -67,6 +67,7 @@ async def load_session_endpoint(
     """
     Load a specific session by ID and set it as active session.
     Fails with 404 if session does not exist or belongs to another user.
+    Preserves active triage follow-up chips.
     """
     messages = db_service.get_chat_history(session_id, user_id=current_user.id)
     if messages is None:
@@ -76,9 +77,44 @@ async def load_session_endpoint(
         )
 
     req.session["session_id"] = session_id
+
+    # Retrieve or reconstruct active triage follow-up chips if session is mid-intake
+    follow_up = None
+    from app.services.chat_service import clinical_engine
+    memory_key = clinical_engine._get_memory_key(current_user.id, session_id)
+    if memory_key in clinical_engine.conversation_states:
+        state = clinical_engine.conversation_states[memory_key]
+        if state.get("triage_status") == "needs_info":
+            follow_up = state.get("follow_up_data")
+
+    if not follow_up and messages and len(messages) > 0:
+        last_msg = messages[-1]
+        if last_msg.get("role") == "assistant" and last_msg.get("source") == "Clinical Triage":
+            rehydrated = clinical_engine._get_or_restore_state(session_id, current_user.id)
+            r = rehydrated.get("triage_round", 0)
+            if 0 < r <= 3:
+                from app.agents.triage_agent import _get_fallback_triage_question
+                fb = _get_fallback_triage_question(
+                    r - 1,
+                    rehydrated.get("question", ""),
+                    rehydrated.get("collected_symptoms", []),
+                    rehydrated.get("questions_asked", []),
+                )
+                if fb:
+                    follow_up = {
+                        "questions": [{"text": fb["question_text"], "options": fb["options"]}],
+                        "triage_round": r,
+                        "max_rounds": 3,
+                    }
+
+    # If follow-up exists, tag the last assistant message so frontend maps it
+    if follow_up and messages and len(messages) > 0:
+        messages[-1]["follow_up"] = follow_up
+
     return {
         "messages": messages,
         "session_id": session_id,
+        "follow_up": follow_up,
         "success": True,
     }
 

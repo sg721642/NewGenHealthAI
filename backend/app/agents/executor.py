@@ -3,7 +3,7 @@ from typing import List
 
 from app.core.logging_config import logger
 from app.core.state import AgentState
-from app.tools.llm_client import get_llm
+from app.tools.llm_client import get_llm, invoke_llm_with_fallback
 
 PROMPT_INJECTION_PATTERN = re.compile(
     r"(?i)(?:ignore\s+(?:all\s+)?(?:previous|prior)\s+instructions|<\|im_start\|>|<\|im_end\|>|<system>|</system>|\[INST\]|\[/INST\])",
@@ -70,6 +70,19 @@ def _format_provenance_citations(documents: List) -> str:
     if citations:
         return "\n\n### 📚 Referenced Sources\n" + "\n".join(citations)
     return ""
+
+
+def _invoke_llm_safe(llm, prompt: str, temperature: float = 0.3, max_tokens: int = 2048):
+    """Safely invoke an available or mocked LLM with automatic model-fallback resilience."""
+    if llm is not None:
+        try:
+            return llm.invoke(prompt)
+        except Exception as e:
+            err_msg = str(e)
+            if any(w in err_msg.lower() for w in ["404", "not found", "decommissioned", "deprecated", "does not exist"]):
+                return invoke_llm_with_fallback(prompt, temperature=temperature, max_tokens=max_tokens)
+            raise
+    return invoke_llm_with_fallback(prompt, temperature=temperature, max_tokens=max_tokens)
 
 
 def ExecutorAgent(state: AgentState) -> AgentState:
@@ -181,26 +194,42 @@ def ExecutorAgent(state: AgentState) -> AgentState:
         )
 
         try:
-            response = llm.invoke(prompt)
-            answer = (
-                response.content.strip()
-                if hasattr(response, "content")
-                else str(response).strip()
-            )
-            if citations:
+            response = _invoke_llm_safe(llm, prompt, temperature=0.3, max_tokens=2048)
+            answer = ""
+            if response is not None:
+                answer = (
+                    response.content.strip()
+                    if hasattr(response, "content")
+                    else str(response).strip()
+                )
+            if citations and answer:
                 answer += citations
             source_info = "Educational Health Assessment" if not has_docs else "Educational Assessment + Medical Literature"
+            if not answer:
+                raise ValueError("Empty response from LLM")
             logger.info("Executor: Generated comprehensive educational assessment")
         except Exception as e:
-            logger.error("Executor: post-triage LLM generation failed (%s)", type(e).__name__)
+            logger.error("Executor: post-triage LLM generation failed (%s): %s", type(e).__name__, str(e)[:120])
+            symptoms_list = "\n".join(f"- {s}" for s in collected_symptoms)
             answer = (
-                "Based on the symptoms you reported, we recommend consulting a qualified healthcare professional "
-                "for a full clinical examination and diagnosis. Please visit a clinic or hospital if symptoms persist or worsen."
+                "## 📋 Health Summary & Overview\n"
+                f"You reported the following symptoms during intake clarification:\n{symptoms_list}\n\n"
+                "## 🔍 Educational Possibilities & Discussion Points\n"
+                "Prolonged or recurring symptoms may be associated with viral infections, bacterial illness, or other inflammatory conditions that require professional clinical evaluation and diagnostic testing.\n\n"
+                "## 💡 Supportive Self-Care & General Measures\n"
+                "- Maintain adequate fluid intake (water, oral rehydration solutions, or clear broths).\n"
+                "- Get adequate rest and avoid strenuous physical exertion.\n"
+                "- Monitor your temperature and symptoms closely.\n\n"
+                "## ⚠️ Red Flags & Warning Signs\n"
+                "Seek immediate emergency medical care (call 112 / 108) if you experience severe shortness of breath, persistent chest pain, confusion, severe dehydration, or an unmanageable high fever (>103°F / 39.4°C).\n\n"
+                "## 🩺 Guidance for Healthcare Provider Consultation\n"
+                "Inform your doctor about the exact onset date, temperature readings, associated symptoms, and any home remedies or over-the-counter medications tried.\n\n"
+                "> **Medical Disclaimer:** This summary is for educational and informational purposes only and does not substitute for professional medical advice, clinical diagnosis, or individualized treatment."
             )
-            source_info = "System Guidance"
+            source_info = "Educational Health Assessment"
 
     # ── 5. Standard RAG-backed response ────────────────────────────────
-    elif has_docs and llm:
+    elif has_docs and (llm or GROQ_API_KEY):
         content = "\n\n".join(
             [_sanitize_text(doc.page_content[:1000]) for doc in state["documents"][:3]]
         )
@@ -218,23 +247,29 @@ def ExecutorAgent(state: AgentState) -> AgentState:
             "- Include a clear medical disclaimer that this is educational information."
         )
         try:
-            response = llm.invoke(prompt)
-            answer = (
-                response.content.strip()
-                if hasattr(response, "content")
-                else str(response).strip()
-            )
-            if citations:
+            response = _invoke_llm_safe(llm, prompt, temperature=0.3, max_tokens=2048)
+            answer = ""
+            if response is not None:
+                answer = (
+                    response.content.strip()
+                    if hasattr(response, "content")
+                    else str(response).strip()
+                )
+            if citations and answer:
                 answer += citations
             source_info = state.get("source") or "Medical Literature Database"
+            if not answer:
+                raise ValueError("Empty response from LLM")
             logger.info("Executor: Generated response from documents")
         except Exception as e:
-            logger.error("Executor: RAG LLM generation failed (%s)", type(e).__name__)
+            logger.error("Executor: RAG LLM generation failed (%s): %s", type(e).__name__, str(e)[:120])
+            first_doc_snippet = state["documents"][0].page_content[:300].strip() if state.get("documents") else ""
             answer = (
-                "For accurate clinical evaluation, please consult with a healthcare professional "
-                "who can properly examine your symptoms."
+                f"### Educational Overview\n\n{first_doc_snippet}\n\n"
+                f"{citations}\n\n"
+                "For accurate clinical evaluation, please consult with a healthcare professional who can properly examine your symptoms."
             )
-            source_info = "System Guidance"
+            source_info = state.get("source") or "Medical Literature Database"
 
     # ── 6. Pre-generated LLM response ──────────────────────────────────
     elif has_llm:

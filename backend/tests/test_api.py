@@ -19,7 +19,10 @@ def test_health_check(test_client):
     """Health endpoint remains public."""
     response = test_client.get("/api/v1/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "healthy", "service": "NewGenHealthAI Backend v3"}
+    data = response.json()
+    assert data["status"] == "healthy"
+    assert data["service"] == "NewGenHealthAI Backend v3"
+    assert "ai_ready" in data
 
 
 def test_unauthenticated_requests_fail_with_401(test_client):

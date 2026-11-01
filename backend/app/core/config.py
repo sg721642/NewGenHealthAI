@@ -21,9 +21,19 @@ CHAT_DB_PATH = os.getenv("CHAT_DB_PATH", os.path.join(_BACKEND_DIR, "storage", "
 VECTOR_STORE_DIR = os.getenv("VECTOR_STORE_DIR", os.path.join(_BACKEND_DIR, "storage", "vector_store"))
 PDF_PATH = os.getenv("PDF_PATH", os.path.join(_BACKEND_DIR, "data", "medical_book.pdf"))
 
-# ── API Keys ───────────────────────────────────────────────────────────────────
+# ── API Keys & Model Selection ───────────────────────────────────────────────
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
+
+# Official Groq active chat & reasoning model configuration
+# (Note: llama-3.3-70b-versatile and llama-3.1-8b-instant are deprecated for developer tier)
+GROQ_CHAT_MODEL: str = os.getenv("GROQ_CHAT_MODEL", "openai/gpt-oss-120b").strip()
+GROQ_TRIAGE_MODEL: str = os.getenv("GROQ_TRIAGE_MODEL", GROQ_CHAT_MODEL).strip()
+_raw_fallback_models = os.getenv("GROQ_FALLBACK_MODELS", "openai/gpt-oss-20b,qwen/qwen3.8-27b").strip()
+GROQ_FALLBACK_MODELS: List[str] = [m.strip() for m in _raw_fallback_models.split(",") if m.strip()]
+
+# ── Localization & Crisis Guidance ───────────────────────────────────────────
+DEFAULT_CRISIS_LOCALE: str = os.getenv("DEFAULT_CRISIS_LOCALE", "IN").strip().upper()
 
 # ── Security & Session Configuration ───────────────────────────────────────────
 ENVIRONMENT = os.getenv("ENVIRONMENT", "development").strip().lower()

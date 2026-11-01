@@ -117,7 +117,7 @@ def check_urgent_risk(text: str) -> Optional[Dict[str, Any]]:
 
 import os
 
-DEFAULT_CRISIS_LOCALE: str = os.getenv("DEFAULT_CRISIS_LOCALE", "ALL").strip().upper()
+DEFAULT_CRISIS_LOCALE: str = os.getenv("DEFAULT_CRISIS_LOCALE", "IN").strip().upper()
 
 
 def generate_urgent_advisory(
@@ -139,24 +139,23 @@ def generate_urgent_advisory(
         india_block = (
             "- **India:**\n"
             "  - **Immediate Danger / Emergency:** Call **112** (All-in-one National Emergency Service)\n"
-            "  - **Tele-MANAS:** Call **14416** or **1800-891-4416** (24/7 Toll-free National Mental Health Helpline, Government of India)\n"
-            "  - **Vandrevala Foundation:** Call or WhatsApp **+91 9999 666 555** (24/7 Free Mental Health Counseling)\n"
-            "  - **TISS iCALL:** Call **9152987821** or **022-25521111** (Mon–Sat, 10:00 AM – 8:00 PM IST; Note: iCALL is not a 24/7 service)"
+            "  - **Tele-MANAS:** Call **14416** or **1800-891-4416** (24/7 Toll-free National Mental Health Helpline, Ministry of Health & Family Welfare, Government of India)\n"
+            "  - **Vandrevala Foundation:** Call or WhatsApp **+91 9999 666 555** (24/7 Free Confidential Support)\n"
+            "  - **KIRAN Helpline:** Call **1800-599-0019** (24/7 Mental Health Rehabilitation Helpline, Govt of India)\n"
+            "  - **TISS iCALL:** Call **9152987821** or **022-25521111** (Mon–Sat, 10:00 AM – 8:00 PM IST)"
         )
         us_block = "- **US and Canada:** Call or text **988** (Suicide & Crisis Lifeline) or call **911**."
         uk_block = "- **UK:** Call **111** (NHS mental health services) or **999** (immediate emergency)."
         eu_block = "- **EU / International:** Call **112** (pan-European emergency) or your local emergency number."
         text_lines = "- **Crisis Text Line:** Text **HOME** to **741741** (US and Canada) or **85258** (UK)."
 
-        # Order blocks according to active locale preference while retaining all references
         if active_locale == "IN":
-            blocks = [india_block, us_block, uk_block, eu_block, text_lines]
+            blocks = [india_block, text_lines, eu_block, us_block]
         elif active_locale in ("US", "CA"):
-            blocks = [us_block, india_block, uk_block, eu_block, text_lines]
+            blocks = [us_block, text_lines, india_block]
         elif active_locale == "UK":
-            blocks = [uk_block, us_block, india_block, eu_block, text_lines]
+            blocks = [uk_block, text_lines, india_block]
         else:
-            # Default / unknown locale: show all major regions neutrally
             blocks = [india_block, us_block, uk_block, eu_block, text_lines]
 
         regional_content = "\n".join(blocks)
@@ -172,17 +171,30 @@ def generate_urgent_advisory(
             "Emergency service numbers listed are static reference information and may not be exhaustive."
         )
 
+    # General medical emergency advisory
+    if active_locale == "IN":
+        emergency_contacts = (
+            "- **India National Emergency:** Call **112** (All-in-one Emergency Response: Medical, Police, Fire)\n"
+            "- **Medical Ambulance Service:** Call **108** (Emergency Critical Care Ambulance where available)\n"
+            "- **National Ambulance Transport:** Call **102** (Free transport for maternal and infant care)\n"
+            "- **Other Regions / International:** Call **911** (US/Canada), **999** (UK), **112** (EU), or your local emergency number."
+        )
+    else:
+        emergency_contacts = (
+            "- **India: 112** (National Emergency) / **108** (Ambulance)\n"
+            "- **US and Canada: 911**\n"
+            "- **UK: 999**\n"
+            "- **EU: 112**\n"
+            "- **Other regions:** Dial your local emergency medical service immediately."
+        )
+
     return (
         f"## 🚨 Emergency Medical Alert: {title}\n\n"
         "**Based on the symptoms you reported, you may be experiencing a medical emergency that requires "
         "immediate, in-person evaluation. Do not wait — contact emergency services now.**\n\n"
         "### Call Emergency Services Immediately\n"
-        "Contact the emergency number for your location:\n"
-        "- **India: 112** (all-in-one national emergency)\n"
-        "- **US and Canada: 911**\n"
-        "- **UK: 999**\n"
-        "- **EU and many other countries: 112**\n"
-        "- **If your country is not listed:** Dial your local emergency services number immediately.\n\n"
+        "Contact the emergency services number for your location:\n"
+        f"{emergency_contacts}\n\n"
         "### Additional Recommended Actions\n"
         "1. **Go to the nearest hospital Emergency Department (ED)** if safe and rapid transport can be arranged.\n"
         "2. **Do not attempt to drive yourself** if experiencing severe chest pain, shortness of breath, "
