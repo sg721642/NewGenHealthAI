@@ -2489,68 +2489,99 @@ export default function App() {
     formData.append('file', file);
     try {
       const res = await fetch(`${API_BASE}/analyze-image`, { method: 'POST', body: formData, headers: authHeaders() });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({ status: 'inconclusive', message: 'Unable to parse server response.' }));
       console.log('Image API Response:', data);
 
-      if (data.type === 'medical_diagnosis') {
-        // --- Medical image detected ---
+      if (data.status === 'model_unavailable') {
+        const catName = data.category || 'this modality';
+        let result = `## ⚙️ Specialist Model Unavailable\n\n`;
+        result += `The AI specialist model for **${catName}** is not loaded or configured on this server.\n\n`;
+        result += `*${data.message || 'Model weights are required to analyze this type of medical image.'}*`;
+        const botMsg = { type: 'assistant', content: result, timestamp: new Date().toLocaleTimeString(), source: 'System' };
+        setMessages(prev => [...prev, botMsg]);
+
+      } else if (data.status === 'unsupported_image') {
+        let result = `## 🖼️ Unsupported Image\n\n`;
+        if (data.description) {
+          result += `**Observed Content:** ${data.description}\n\n`;
+        }
+        result += `*The uploaded image does not appear to be a supported medical image (skin photo, X-ray radiograph, or retinal fundus scan).\nPlease upload a supported clinical image for AI analysis.*`;
+        const botMsg = { type: 'assistant', content: result, timestamp: new Date().toLocaleTimeString(), source: 'Vision Classifier' };
+        setMessages(prev => [...prev, botMsg]);
+
+      } else if (data.status === 'inconclusive') {
+        let result = `## ⚠️ Analysis Inconclusive\n\n`;
+        result += `${data.message || 'The image could not be reliably classified or visual features were ambiguous.'}\n\n`;
+        result += `*Please upload a clearer clinical image for analysis.*`;
+        const botMsg = { type: 'assistant', content: result, timestamp: new Date().toLocaleTimeString(), source: 'Vision Classifier' };
+        setMessages(prev => [...prev, botMsg]);
+
+      } else if (data.status === 'invalid_image') {
+        let result = `## ⚠️ Invalid Image\n\n`;
+        result += `${data.error || 'The uploaded file could not be decoded as a valid image format.'}\n`;
+        const botMsg = { type: 'assistant', content: result, timestamp: new Date().toLocaleTimeString(), source: 'System' };
+        setMessages(prev => [...prev, botMsg]);
+
+      } else if (data.status === 'analysis_complete' || data.type === 'medical_diagnosis') {
+        // --- Valid analysis result ---
         const categoryLabels = {
-          skin: '🧬 Skin Disease',
-          xray: '🦴 X-ray / Fracture',
-          retina: '👁️ Retinal / Eye Disease',
-          general: '🏥 General Medical Condition',
+          skin: '🧬 Skin Imaging',
+          xray: '🦴 X-ray Radiography',
+          retina: '👁️ Retinal Fundus Scan',
+          general: '🏥 General Medical Imaging',
         };
-        const domainLabels = {
-          skin: '📸 Skin photo detected',
-          xray: '📸 X-ray / grayscale scan detected',
-          retina: '📸 Retinal fundus scan detected',
-          general: '📸 Medical image detected',
-        };
-        const catLabel = categoryLabels[data.category] || '🩺 Medical';
-        const domainLabel = domainLabels[data.domain_hint] || '';
-        const conf = (data.confidence * 100).toFixed(1);
+        const catLabel = categoryLabels[data.category] || '🩺 Medical Imaging';
+        const scoreVal = typeof data.score === 'number' ? data.score : (typeof data.confidence === 'number' ? data.confidence : 0);
 
-        let result = `## 🩺 Medical Image Analysis\n\n`;
-        if (domainLabel) result += `*${domainLabel}*\n\n`;
-        result += `**Category:** ${catLabel}\n\n`;
-        result += `### 🔍 Primary Diagnosis: **${data.disease}**\n`;
-        result += `**Confidence:** ${conf}%\n\n`;
+        let result = `## 🔬 Medical Image Analysis\n\n`;
+        result += `**Modality:** ${catLabel}\n\n`;
+        result += `### 📋 Model Finding: **${data.disease}**\n`;
+        result += `**Model Output Score:** ${scoreVal.toFixed(4)} *(uncalibrated prototype score, not a clinical probability)*\n\n`;
 
-        // Top predictions from winning model
+        if (data.is_negative_finding) {
+          result += `> **Normal/Negative Reference**: The classifier identified features consistent with normal reference imagery. This is an algorithmic observation and does not rule out underlying medical conditions.\n\n`;
+        } else if (data.finding_type === 'anatomy_identified') {
+          result += `> **Anatomical Classification**: The classifier identified the anatomical location. No disease pathology or fracture was detected or confirmed by the model.\n\n`;
+        }
+
+        if (data.clinical_note) {
+          result += `*${data.clinical_note}*\n\n`;
+        }
+
+        // Differential predictions
         if (data.predictions && data.predictions.length > 0) {
-          result += `### 🔬 Differential Predictions\n`;
+          result += `### 🔬 Differential Model Outputs\n`;
           data.predictions.forEach((p, i) => {
-            const pct = (p.confidence * 100).toFixed(1);
-            const filled = Math.round(p.confidence * 20);
+            const pScore = typeof p.score === 'number' ? p.score : (typeof p.confidence === 'number' ? p.confidence : 0);
+            const filled = Math.min(20, Math.max(0, Math.round(pScore * 20)));
             const bar = '█'.repeat(filled) + '░'.repeat(20 - filled);
-            result += `${i + 1}. **${p.disease}** — ${pct}% \`${bar}\`\n`;
+            result += `${i + 1}. **${p.disease}** — Score: ${pScore.toFixed(4)} \`${bar}\`\n`;
           });
           result += '\n';
         }
 
-        result += `---\n*⚠️ AI-assisted analysis — always consult a qualified healthcare professional for diagnosis and treatment.*\n`;
+        result += `---\n*⚠️ AI Research Prototype — Experimental model outputs are unvalidated and must not be used for medical decisions. Consult a qualified physician for clinical diagnosis and care.*\n`;
 
-        const botMsg = { type: 'assistant', content: result, timestamp: new Date().toLocaleTimeString(), source: `${data.category} model` };
+        const botMsg = { type: 'assistant', content: result, timestamp: new Date().toLocaleTimeString(), source: `${data.category || 'medical'} model` };
         setMessages(prev => [...prev, botMsg]);
 
-        // Medical details from RAG + LLM
+        // Medical details from literature / RAG
         if (data.medical_details) {
           const detailMsg = {
             type: 'assistant',
-            content: `### 📋 Medical Information: ${data.disease}\n\n${data.medical_details}`,
+            content: `### 📋 Literature Reference: ${data.disease}\n\n${data.medical_details}`,
             timestamp: new Date().toLocaleTimeString(),
-            source: 'RAG + LLM',
+            source: 'Medical Reference',
           };
           setMessages(prev => [...prev, detailMsg]);
         }
 
       } else {
-        // --- General (non-medical) image ---
         let result = `## 🖼️ Image Analysis\n\n`;
         if (data.description) {
           result += `**Description:** ${data.description}\n\n`;
         }
-        result += `*This image does not appear to be a recognizable medical image.\nUpload a clear skin photo, X-ray, retina scan, or other medical image for AI-powered diagnosis.*`;
+        result += `*This image does not appear to be a recognizable medical image.\nUpload a clear skin photo, X-ray, retina scan, or other medical image for AI analysis.*`;
         const botMsg = { type: 'assistant', content: result, timestamp: new Date().toLocaleTimeString() };
         setMessages(prev => [...prev, botMsg]);
       }

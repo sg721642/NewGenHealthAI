@@ -109,6 +109,34 @@ npm --prefix frontend run dev
 3. For database rollback: restore from verified online backup file using `restore_database`
 4. Verify: login, create conversation, send message, retrieve history
 
+## Image Classification & Model Provenance Architecture (Phase 2A — A03, A04)
+
+### 1. Hard Modality Locking & Zero-Fallback Policy
+- **CLIP Domain Routing**: Zero-shot CLIP evaluates incoming imagery across 5 domain hypotheses (`skin`, `xray`, `retina`, `general`, `non_medical`).
+- **Strict Modality Lock**: Executes **only** the single verified specialist model matching the detected domain.
+- **Elimination of Fallbacks**: If the specialist model weights are not loaded locally, the system returns `HTTP 503 Service Unavailable` with `status="model_unavailable"`. It strictly **never** falls back to `general` or executes all models.
+- **Non-Medical Filtering**: Non-medical images (e.g. landscapes, animals, everyday objects) return `HTTP 422 Unprocessable Entity` with `status="unsupported_image"` and optional BLIP scene description. Medical disease classification models are never invoked on non-medical photos.
+- **Ambiguity Guard**: Ambiguous or failing CLIP detections return `HTTP 200 OK` with `status="inconclusive"`.
+
+### 2. Model Provenance & Specification Table
+
+> [!WARNING]
+> **Clinical Accuracy Disclaimer**: All models are research prototypes trained on publicly available academic datasets. Model weights are experimental and have **NOT** been clinically validated or approved by regulatory bodies (FDA, CE, EMA). All scores are uncalibrated algorithmic outputs and must not be used for diagnosis, triage, or clinical decision-making.
+
+| Modality | Architecture | Input Size | Classes | Weights File | Class File | Clinical Validation Status |
+|---|---|---|---|---|---|---|
+| **Skin** | `timm` EfficientNet | 224×224 RGB | 216 classes (dermatological conditions) | `skin_disease_model.pth` | `classes.txt` | ⚠️ Unvalidated Academic Prototype |
+| **X-ray** | DenseNet121 | 224×224 RGB | 10 classes (7 anatomy + 2 conditions + 1 normal) | `xray_fracture_model.pth` | `xray_classes.txt` | ⚠️ Unvalidated Academic Prototype |
+| **Retina** | EfficientNet-B0 | 224×224 RGB | 47 classes (fundus ocular conditions + healthy eye) | `retina_model.pth` | `retina_classes.txt` | ⚠️ Unvalidated Academic Prototype |
+| **General** | ResNet18 | 224×224 RGB | 69 classes (medical modalities & conditions) | `general_disease_model.pth` | `general_classes.txt` | ⚠️ Unvalidated Academic Prototype |
+
+### 3. Normal / Negative & Anatomy Safeguards
+- **Negative Finding Preservation**: Valid negative classes (`normal`, `normal cases`, `notumor`, `notinfected`, `uninfected`, `non-covid`, `benign`, `bengin cases`, `healthy eye`) are preserved as top valid findings. Lower-ranked conditions are never promoted ahead of legitimate normal predictions.
+- **X-ray Anatomy Distinction**: Body-part predictions (`wrist`, `elbow`, `finger`, `forearm`, `hand`, `humerus`, `shoulder`) are classified as `finding_type="anatomy_identified"`. The system never manufactures "Abnormality Detected" or fractures from anatomical location labels alone.
+- **Dataset Artifact Filtering**: Unvalidated dataset artifacts (`preview`, `train`, `val`, `cropped`, etc.) are caught. If ranked top, the system returns `status="inconclusive"` and suppresses lower-ranked condition promotion.
+
+---
+
 ## Pre-deployment Verification Gates
 
 - [x] Auth isolation: cross-user session access blocked (A01/A02 verified with 35 backend tests)
@@ -125,7 +153,12 @@ npm --prefix frontend run dev
 - [x] Bounded per-conversation asyncio locking and clear/delete race guards implemented (Phase 1D / A02)
 - [x] Clinical memory rehydration after restart and cache eviction verified (Phase 1D / A02)
 - [x] Frontend AbortController and account switch state wipe verified (Phase 1D / A02)
-- [x] Complete backend test suite inventory verified (139 passed, 1 skipped)
-- [x] Frontend build clean with lint passing (0 errors, 0 warnings, 6/6 tests pass)
+- [x] Strict hard modality locking: missing specialist model returns HTTP 503 `model_unavailable` with zero fallback (A04 / Phase 2A)
+- [x] Legitimate normal and negative findings preserved without disease promotion (A03 / Phase 2A)
+- [x] X-ray anatomy classes identified as anatomy without fabricating fractures or abnormalities (A03 / Phase 2A)
+- [x] Dataset artifacts filtered; top artifact yields `status="inconclusive"` without disease promotion (A03 / Phase 2A)
+- [x] False confidence calibration removed; uncalibrated scores with prototype disclaimers displayed (A04 / Phase 2A)
+- [x] Complete backend test suite inventory verified (175 passed, 1 skipped)
+- [x] Frontend build clean with lint passing (0 errors, 0 warnings, 11/11 tests pass)
 - [ ] HF Space running status verified with live credentials (post-deployment)
 

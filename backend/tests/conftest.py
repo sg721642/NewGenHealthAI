@@ -31,6 +31,20 @@ for mod_name in [
         except ImportError:
             sys.modules[mod_name] = MagicMock()
 
+if 'torch' not in sys.modules:
+    try:
+        import torch
+    except ImportError:
+        mock_torch = MagicMock()
+        mock_torch.cuda.is_available.return_value = False
+        mock_torch.__version__ = "2.6.1"
+        sys.modules['torch'] = mock_torch
+        sys.modules['torch.nn'] = MagicMock()
+        sys.modules['torch.nn.functional'] = MagicMock()
+        sys.modules['torchvision'] = MagicMock()
+        sys.modules['torchvision.models'] = MagicMock()
+        sys.modules['torchvision.transforms'] = MagicMock()
+
 from app.main import app  # noqa: E402
 from app.services import chat_service, db_service  # noqa: E402
 

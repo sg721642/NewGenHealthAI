@@ -366,4 +366,111 @@ npm --prefix frontend run build
 - **Exit Code**: 0
 - **Artifacts**: Static bundle successfully output to `../backend/app/static/`
 
+---
+
+## Phase 2A Test Execution Summary
+
+### 1. Complete Backend Test Suite (Pytest)
+
+Command:
+```bash
+/tmp/nghai_venv/bin/pytest backend/tests/ -v
+```
+
+Outcome:
+- **Total Tests**: 176
+- **Passed**: 175
+- **Skipped**: 1 (`test_create_workflow` requiring live LangGraph LLM keys)
+- **Failed**: 0
+- **Duration**: 2.66s
+- **Exit Code**: 0
+
+Test Inventory by Module:
+| Test Module | Total Tests | Passed | Skipped | Failed | Status |
+|---|---|---|---|---|---|
+| `test_agents.py` | 8 | 8 | 0 | 0 | Passed |
+| `test_api.py` | 13 | 13 | 0 | 0 | Passed |
+| `test_api_edge_cases.py` | 5 | 5 | 0 | 0 | Passed |
+| `test_app.py` | 1 | 1 | 0 | 0 | Passed |
+| `test_auth_hardening.py` | 14 | 14 | 0 | 0 | Passed |
+| `test_coverage_gaps.py` | 9 | 9 | 0 | 0 | Passed |
+| `test_database.py` | 3 | 3 | 0 | 0 | Passed |
+| `test_logging.py` | 4 | 4 | 0 | 0 | Passed |
+| `test_phase1c1_hardening.py` | 13 | 13 | 0 | 0 | Passed |
+| `test_phase1d_concurrency.py` | 15 | 15 | 0 | 0 | Passed |
+| `test_phase2a_image_classifier.py` | 36 | 36 | 0 | 0 | Passed |
+| `test_security_ownership.py` | 12 | 12 | 0 | 0 | Passed |
+| `test_services.py` | 11 | 11 | 0 | 0 | Passed |
+| `test_tools.py` | 12 | 12 | 0 | 0 | Passed |
+| `test_workflow.py` | 1 | 1 | 0 | 0 | Passed |
+| `test_workflow_routing.py` | 7 | 6 | 1 | 0 | Passed (1 Skipped) |
+| **Total Suite** | **176** | **175** | **1** | **0** | **Passed** |
+
+Phase 2A 20-Scenario Regression Matrix Coverage (`test_phase2a_image_classifier.py`):
+| Matrix Scenario | Scenario Description & Security Guarantee | Tests | Outcome |
+|---|---|---|---|
+| **Scenario 1** | Normal vs Condition (normal=0.96 vs pneumonia=0.04) -> normal preserved as top valid finding; no pneumonia diagnosis; no clinical certainty claim | `test_scenario_01_normal_preserved_no_disease_promotion` | ✅ Pass |
+| **Scenario 2** | Valid negative classes preserved (`normal`, `normal cases`, `notumor`, `notinfected`, `uninfected`, `non-covid`, `benign`, `bengin cases`, `healthy eye`) | `test_scenario_02_valid_negative_classes_preserved` (10 parameterized tests) | ✅ Pass |
+| **Scenario 3** | Invalid dataset artifact top prediction (`preview`, `train`, `val`, `cropped`, `jpegimages`, `all`) -> returns `status="inconclusive"`, no disease promotion | `test_scenario_03_top_artifact_triggers_inconclusive` (6 parameterized tests) | ✅ Pass |
+| **Scenario 4** | X-ray anatomy-only (wrist=0.95) -> `finding_type="anatomy_identified"`, no fracture/abnormality diagnosed | `test_scenario_04_xray_anatomy_only_wrist` | ✅ Pass |
+| **Scenario 5** | X-ray mixed anatomy and condition -> condition detected when top; anatomy preserved when top without disease promotion | `test_scenario_05_xray_condition_top_with_secondary_anatomy`, `test_scenario_05_xray_anatomy_top_with_subthreshold_condition` | ✅ Pass |
+| **Scenarios 6–9** | Hard modality lock (missing `skin`, `xray`, `retina`, or `general` model returns `status="model_unavailable"`, HTTP 503; zero fallback to general or other models) | `test_scenarios_06_to_09_hard_modality_lock_missing_model` (4 parameterized tests) | ✅ Pass |
+| **Scenario 10** | All models missing -> safe return of `status="model_unavailable"`, HTTP 503 without crashes | `test_scenario_10_all_models_missing` | ✅ Pass |
+| **Scenario 11** | CLIP failure / exception -> `status="inconclusive"`, no fallback to general | `test_scenario_11_clip_exception_fails_inconclusive` | ✅ Pass |
+| **Scenario 12** | Ambiguous CLIP domain -> `status="inconclusive"` | `test_scenario_12_ambiguous_clip_domain` | ✅ Pass |
+| **Scenario 13** | Non-medical image -> `status="unsupported_image"`, HTTP 422 | `test_scenario_13_non_medical_image_returns_unsupported` | ✅ Pass |
+| **Scenario 14** | Model exception during inference -> `status="inconclusive"`, no cross-modality fallback | `test_scenario_14_inference_exception_handled_inconclusive` | ✅ Pass |
+| **Scenario 15** | Model returns empty predictions -> `status="inconclusive"` | `test_scenario_15_empty_predictions_handled_inconclusive` | ✅ Pass |
+| **Scenario 16** | Low-ranked disease not promoted when normal or negative class is top rank | Verified across Scenarios 1, 2, and 5B | ✅ Pass |
+| **Scenario 17** | Score interpretation present: uncalibrated score returned, `calibrated_confidence` is None, prototype disclaimer | `test_scenario_17_score_interpretation_and_no_calibrated_confidence` | ✅ Pass |
+| **Scenario 18** | Image API endpoint: HTTP 400 on empty or invalid/corrupted image bytes (`status="invalid_image"`) | `test_scenario_18_endpoint_invalid_image_returns_400` | ✅ Pass |
+| **Scenario 19** | Image API endpoint: HTTP 422 on unsupported non-medical image (`status="unsupported_image"`) | `test_scenario_19_endpoint_unsupported_image_returns_422` | ✅ Pass |
+| **Scenario 20** | Image API endpoint HTTP contract: 503 on `model_unavailable`, 200 on `inconclusive`, 200 on `analysis_complete` | `test_scenario_20a_endpoint_model_unavailable_returns_503`, `test_scenario_20b_endpoint_inconclusive_returns_200`, `test_scenario_20c_endpoint_analysis_complete_returns_200` | ✅ Pass |
+| **Auth Security** | Image API requires authentication; unauthenticated request returns HTTP 401 | `test_scenario_security_endpoint_unauthenticated_returns_401` | ✅ Pass |
+
+---
+
+### 2. Frontend Vitest Integration Tests
+
+Command:
+```bash
+npm --prefix frontend test -- --run
+```
+- **Tests**: 11 / 11 passed (100%)
+- **Duration**: 329ms
+- **New Tests Added**:
+  - `renders analysis_complete with uncalibrated score and without primary diagnosis or percentage certainty`: Verifies model finding rendering, uncalibrated score display, and absence of misleading claims.
+  - `renders normal/negative reference finding notice without diagnosing disease`: Verifies normal reference finding disclaimer and prevention of pneumonia diagnosis.
+  - `renders model_unavailable status cleanly`: Verifies HTTP 503 / `model_unavailable` UI feedback informing user of missing specialist model weights.
+  - `renders unsupported_image status cleanly`: Verifies HTTP 422 / `unsupported_image` UI feedback with BLIP scene description.
+  - `renders inconclusive status cleanly`: Verifies `inconclusive` UI notice requesting clearer clinical imagery.
+- **Exit Code**: 0
+
+---
+
+### 3. Frontend ESLint Linter
+
+Command:
+```bash
+npm --prefix frontend run lint
+```
+- **Errors**: 0
+- **Warnings**: 0
+- **Exit Code**: 0
+
+---
+
+### 4. Frontend Production Build (Vite)
+
+Command:
+```bash
+npm --prefix frontend run build
+```
+- **Exit Code**: 0
+- **Artifacts**:
+  - `../backend/app/static/index.html` (0.68 kB)
+  - `../backend/app/static/assets/index-CB66vf3N.css` (18.46 kB)
+  - `../backend/app/static/assets/index-DkjXr3wK.js` (397.18 kB)
+
+
 

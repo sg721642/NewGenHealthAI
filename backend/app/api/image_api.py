@@ -136,74 +136,157 @@ async def analyze_image(
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
 ):
+    """
+    Classify uploaded medical image with strict modality locking, safe negative-class handling,
+    and uncalibrated model scores. Never fabricates clinical certainty or cross-modality diagnoses.
+    """
     try:
         contents = await file.read()
-        image = Image.open(io.BytesIO(contents)).convert("RGB")
+        if not contents:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "status": "invalid_image",
+                    "success": False,
+                    "error": "Empty file provided.",
+                },
+            )
+
+        try:
+            image = Image.open(io.BytesIO(contents)).convert("RGB")
+        except Exception:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "status": "invalid_image",
+                    "success": False,
+                    "error": "The uploaded file could not be decoded as a valid image.",
+                },
+            )
 
         from app.services.disease_classifier import disease_classifier
 
-        # ── 1. Disease classification (CLIP routes to the right model) ──
+        # ── 1. Disease classification with hard modality lock ──
         prediction = disease_classifier.classify(image)
+        status = prediction.get("status", "inconclusive")
 
-        confidence = prediction.get("confidence", 0.0)
-        calibrated_conf = prediction.get("calibrated_conf", 0.0)
-        disease = prediction.get("disease")
-        category = prediction.get("category", "non_medical")
-        domain_hint = prediction.get("domain_hint", "unknown")
-
-        response = {
-            "success": True,
-            "calibrated_confidence": round(calibrated_conf, 4),
-            "domain_hint": domain_hint,
-            "domain_scores": prediction.get("domain_scores", {}),
-            "domain_confidence": prediction.get("domain_confidence", 0.0),
-        }
-
-        # ── 2. Medical image detected → return diagnosis ──
-        # CLIP detected a medical domain AND a specialist model returned a disease
-        if category != "non_medical" and disease:
-            logger.info(
-                f"DIAGNOSIS: {category} -> {disease} "
-                f"(raw={confidence:.4f}, domain={domain_hint})"
+        # ── 2. Handle 'model_unavailable' (HTTP 503) ──
+        if status == "model_unavailable":
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "status": "model_unavailable",
+                    "success": False,
+                    "category": prediction.get("category"),
+                    "message": prediction.get(
+                        "message",
+                        "The required AI specialist model is not currently loaded on this server."
+                    ),
+                    "domain_hint": prediction.get("domain_hint"),
+                },
             )
-            response["type"] = "medical_diagnosis"
-            response["category"] = category
-            response["disease"] = disease
-            response["confidence"] = round(confidence, 4)
-            response["predictions"] = prediction.get("predictions", [])
-            response["all_model_results"] = prediction.get("all_results", {})
 
-            # Fetch detailed medical info via RAG + LLM
-            medical_info = get_medical_info(disease, category)
-            response["medical_details"] = medical_info["raw"]
-
-        else:
-            # ── 3. Non-medical image → BLIP caption ──
+        # ── 3. Handle 'unsupported_image' (HTTP 422) ──
+        if status == "unsupported_image":
             logger.info(
-                f"Non-medical image detected (domain={domain_hint}, "
-                f"conf={prediction.get('domain_confidence', 0):.3f}) "
-                f"— using BLIP caption"
+                "Non-medical or unsupported image detected (domain=%s, conf=%.3f) — generating descriptive caption",
+                prediction.get("domain_hint"),
+                prediction.get("domain_confidence", 0.0),
             )
+            caption = None
             try:
                 blip_proc, blip_mdl = _get_blip()
                 inputs = blip_proc(images=image, return_tensors="pt").to(device)
                 output = blip_mdl.generate(**inputs, max_new_tokens=50)
                 caption = blip_proc.decode(output[0], skip_special_tokens=True)
             except Exception as blip_err:
-                logger.warning(f"BLIP fallback failed: {blip_err}")
-                caption = "Could not generate image description."
+                logger.warning("BLIP captioning unavailable: %s", blip_err)
 
-            response["type"] = "general_image"
-            response["description"] = caption
-            response["confidence"] = round(confidence, 4) if confidence else 0.0
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "status": "unsupported_image",
+                    "success": False,
+                    "type": "general_image",
+                    "category": "non_medical",
+                    "description": caption or "The uploaded image does not appear to be a supported medical image.",
+                    "domain_hint": prediction.get("domain_hint", "non_medical"),
+                    "domain_confidence": prediction.get("domain_confidence", 0.0),
+                },
+            )
 
-        return JSONResponse(response)
+        # ── 4. Handle 'inconclusive' (HTTP 200) ──
+        if status == "inconclusive":
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "status": "inconclusive",
+                    "success": False,
+                    "message": prediction.get(
+                        "message",
+                        "Image analysis was inconclusive or visual features could not be reliably classified."
+                    ),
+                    "category": prediction.get("category"),
+                    "domain_hint": prediction.get("domain_hint"),
+                    "domain_confidence": prediction.get("domain_confidence", 0.0),
+                },
+            )
+
+        # ── 5. Handle 'analysis_complete' (HTTP 200) ──
+        disease = prediction.get("disease")
+        category = prediction.get("category", "general")
+        finding_type = prediction.get("finding_type", "condition_detected")
+        is_negative = prediction.get("is_negative_finding", False)
+        score = prediction.get("score", 0.0)
+
+        # Retrieve medical literature only for verified disease conditions, not normal or anatomy findings
+        medical_details = None
+        if finding_type == "condition_detected" and not is_negative and disease:
+            medical_info = get_medical_info(disease, category)
+            medical_details = medical_info.get("raw")
+        elif is_negative:
+            medical_details = (
+                "The model identified features matching normal reference imagery. "
+                "No pathological symptoms or treatments are applicable to a normal reference finding."
+            )
+        elif finding_type == "anatomy_identified":
+            medical_details = (
+                "The model identified the anatomical location. "
+                "No disease pathology or fracture was classified for this image."
+            )
+
+        response_body = {
+            "status": "analysis_complete",
+            "success": True,
+            "type": "medical_diagnosis",  # Backwards compatibility
+            "category": category,
+            "disease": disease,
+            "finding_type": finding_type,
+            "is_negative_finding": is_negative,
+            "anatomical_region": prediction.get("anatomical_region"),
+            "score": round(score, 4),
+            "confidence": round(score, 4),  # Deprecated alias for raw uncalibrated score
+            "calibrated_confidence": None,  # False calibration removed
+            "score_interpretation": prediction.get(
+                "score_interpretation",
+                "Unvalidated prototype model score; not a calibrated clinical probability."
+            ),
+            "predictions": prediction.get("predictions", []),
+            "medical_details": medical_details,
+            "clinical_note": prediction.get("clinical_note"),
+            "domain_hint": prediction.get("domain_hint"),
+            "domain_confidence": prediction.get("domain_confidence", 0.0),
+        }
+
+        return JSONResponse(status_code=200, content=response_body)
 
     except Exception as e:
-        logger.error(f"Image analysis error: {str(e)}")
-        import traceback
-        logger.error(traceback.format_exc())
+        logger.error("Image analysis unexpected error: %s", str(e))
         return JSONResponse(
             status_code=500,
-            content={"success": False, "error": str(e)},
+            content={
+                "status": "inconclusive",
+                "success": False,
+                "error": "An internal error occurred while processing the image.",
+            },
         )

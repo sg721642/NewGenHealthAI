@@ -23,3 +23,8 @@ global.Element.prototype.scrollIntoView = vi.fn();
 global.Element.prototype.scrollTo = vi.fn();
 global.window.scroll = vi.fn();
 global.window.scrollTo = vi.fn();
+
+if (typeof URL.createObjectURL === 'undefined') {
+  URL.createObjectURL = vi.fn(() => 'blob:mock-image');
+  URL.revokeObjectURL = vi.fn();
+}

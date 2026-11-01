@@ -41,15 +41,26 @@ from app.core.logging_config import logger
 # PREDICTION QUALITY FILTERS
 # ═══════════════════════════════════════════════════════════════
 
-# Dataset artifact classes — NEVER return these as a diagnosis
-GARBAGE_CLASSES = {
+# Dataset artifact classes — non-medical strings, filesystem paths, split names.
+# NEVER return these as a condition or diagnosis.
+DATASET_ARTIFACT_CLASSES = {
     "all", "train", "test", "val", "valid", "done", "preview", "cropped",
     "jpegimages", "test cases", "other", "others", "others augmented",
     "c-nmc test final phase data", "c-nmc test prelim phase data",
     "im dyskeratotic", "im koilocytotic", "im metaplastic",
     "im parabasal", "im superficial-intermediate",
-    "none", "notumor", "notinfected", "uninfected", "non-covid",
-    "bengin cases", "normal", "normal cases", "monkeypox augmented",
+    "none", "monkeypox augmented",
+}
+
+# Backward compatibility alias
+GARBAGE_CLASSES = DATASET_ARTIFACT_CLASSES
+
+# Legitimate negative, normal, uninfected, and benign reference findings.
+# These MUST NEVER be suppressed or treated as garbage dataset artifacts.
+VALID_NEGATIVE_CLASSES = {
+    "normal", "normal cases", "notumor", "notinfected", "uninfected",
+    "non-covid", "bengin cases", "benign",
+    "healthy eye (no observable ocular disease)",
 }
 
 # X-ray body parts — anatomical locations, not diseases
@@ -197,14 +208,16 @@ def detect_visual_domain(image: Image.Image) -> tuple:
                 )
                 return best_medical, medical_probs[best_medical], scores
 
+        if best_conf < 0.30:
+            logger.info("CLIP domain detection confidence below threshold (%.3f); marking ambiguous", best_conf)
+            return "ambiguous", best_conf, scores
+
         return best_domain, best_conf, scores
 
     except Exception as e:
         logger.error(f"CLIP domain detection error: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
-        # Fallback: run general model if CLIP fails
-        return "general", 0.0, {}
+        # Never silently fall back to general on CLIP failure; return unknown
+        return "unknown", 0.0, {"error": str(e)}
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -637,236 +650,448 @@ class DiseaseClassifier:
 
     @staticmethod
     def _first_clean_prediction(predictions):
-        """Return the first non-garbage prediction, or None."""
+        """
+        Return the first valid non-artifact prediction, or None.
+        Preserves valid negative/normal classes without suppressing them.
+        """
         for p in predictions:
-            if p["disease"].lower().strip() not in GARBAGE_CLASSES:
+            name = p["disease"].lower().strip()
+            if name not in DATASET_ARTIFACT_CLASSES:
                 return p["disease"], p["confidence"]
         return None, 0.0
 
     @staticmethod
     def _format_disease(category, raw_name):
-        """Pretty-print a disease name for the UI."""
+        """Format a disease, condition, or reference finding name for display."""
+        if not raw_name:
+            return ""
         key = raw_name.lower().strip()
+        # Handle legitimate negative / normal reference classes
+        if key in {"normal", "normal cases"}:
+            return "Normal Reference Finding"
+        if key == "notumor":
+            return "No Tumor Detected (Reference Normal)"
+        if key in {"notinfected", "uninfected"}:
+            return "Uninfected / Negative Finding"
+        if key == "non-covid":
+            return "Non-COVID Finding"
+        if key in {"bengin cases", "benign"}:
+            return "Benign Finding"
+        if key == "healthy eye (no observable ocular disease)":
+            return "Healthy Eye (No Observable Ocular Disease)"
         if category == "general" and key in GENERAL_DISPLAY:
             return GENERAL_DISPLAY[key]
         if category == "retina":
-            return raw_name          # already well-formatted
+            return raw_name
         if category == "xray" and key in XRAY_CONDITIONS:
             return raw_name.title()
         return raw_name.replace("_", " ").title()
 
+    def _interpret_xray_predictions(self, predictions, raw_conf):
+        """
+        Interpret predictions from the X-ray specialist model.
+        Guarantees:
+        - Anatomical classes (wrist, elbow, etc.) are treated as anatomy, NOT disease.
+        - Never manufactures an abnormality or fracture from a body-part prediction.
+        - Never promotes a low-ranked fracture or pneumonia when top prediction is anatomy.
+        - If top prediction is an artifact, returns inconclusive.
+        """
+        if not predictions:
+            return {
+                "status": "inconclusive",
+                "reason": "empty_predictions",
+                "message": "Model returned no predictions.",
+                "disease": None,
+                "score": 0.0,
+                "predictions": [],
+            }
+
+        top_p = predictions[0]
+        top_name = top_p["disease"].lower().strip()
+        top_score = float(top_p["confidence"])
+
+        # Check if top prediction is an invalid artifact
+        if top_name in DATASET_ARTIFACT_CLASSES:
+            return {
+                "status": "inconclusive",
+                "reason": "top_prediction_is_artifact",
+                "message": "Highest-ranked prediction is an unvalidated dataset artifact. Automatic disease promotion suppressed.",
+                "artifact_class": top_p["disease"],
+                "disease": None,
+                "score": 0.0,
+                "predictions": [],
+            }
+
+        # Case 1: Top prediction is an anatomical location (e.g. wrist = 0.95)
+        if top_name in XRAY_BODY_PARTS:
+            part = top_p["disease"].title()
+            formatted_preds = [
+                {
+                    "disease": self._format_disease("xray", p["disease"]),
+                    "score": round(float(p["confidence"]), 4),
+                    "confidence": round(float(p["confidence"]), 4),
+                }
+                for p in predictions
+                if p["disease"].lower().strip() not in DATASET_ARTIFACT_CLASSES
+            ][:5]
+
+            return {
+                "status": "analysis_complete",
+                "finding_type": "anatomy_identified",
+                "is_negative_finding": False,
+                "disease": f"Anatomy Identified: {part} (No pathology classified)",
+                "anatomical_region": part,
+                "score": round(top_score, 4),
+                "clinical_note": (
+                    f"The model identified the anatomical region as {part}. "
+                    "The classifier vocabulary does not provide evidence of fracture or pneumonia for this image, "
+                    "and anatomical classification alone cannot determine the presence or absence of an abnormality."
+                ),
+                "predictions": formatted_preds,
+            }
+
+        # Case 2: Top prediction is a valid negative finding
+        if top_name in VALID_NEGATIVE_CLASSES:
+            display = self._format_disease("xray", top_p["disease"])
+            formatted_preds = [
+                {
+                    "disease": self._format_disease("xray", p["disease"]),
+                    "score": round(float(p["confidence"]), 4),
+                    "confidence": round(float(p["confidence"]), 4),
+                }
+                for p in predictions
+                if p["disease"].lower().strip() not in DATASET_ARTIFACT_CLASSES
+            ][:5]
+            return {
+                "status": "analysis_complete",
+                "finding_type": "normal_or_negative",
+                "is_negative_finding": True,
+                "disease": display,
+                "raw_prediction": top_p["disease"],
+                "score": round(top_score, 4),
+                "clinical_note": (
+                    f"Model identified features matching '{display}'. "
+                    "This is an uncalibrated algorithmic output and does not establish medical health or rule out clinical conditions."
+                ),
+                "predictions": formatted_preds,
+            }
+
+        # Case 3: Top prediction is an actual medical condition (fracture or pneumonia)
+        if top_name in XRAY_CONDITIONS:
+            cond = top_name.title()
+            # If an anatomy class appears as a secondary finding, we can note it
+            secondary_anatomy = next(
+                (p["disease"].title() for p in predictions[1:] if p["disease"].lower().strip() in XRAY_BODY_PARTS),
+                None
+            )
+            display = f"{secondary_anatomy} {cond}" if secondary_anatomy else cond
+
+            formatted_preds = [
+                {
+                    "disease": self._format_disease("xray", p["disease"]),
+                    "score": round(float(p["confidence"]), 4),
+                    "confidence": round(float(p["confidence"]), 4),
+                }
+                for p in predictions
+                if p["disease"].lower().strip() not in DATASET_ARTIFACT_CLASSES
+            ][:5]
+
+            return {
+                "status": "analysis_complete",
+                "finding_type": "condition_detected",
+                "is_negative_finding": False,
+                "disease": display,
+                "anatomical_region": secondary_anatomy,
+                "score": round(top_score, 4),
+                "predictions": formatted_preds,
+            }
+
+        # Case 4: Any other non-artifact class
+        display = self._format_disease("xray", top_p["disease"])
+        formatted_preds = [
+            {
+                "disease": self._format_disease("xray", p["disease"]),
+                "score": round(float(p["confidence"]), 4),
+                "confidence": round(float(p["confidence"]), 4),
+            }
+            for p in predictions
+            if p["disease"].lower().strip() not in DATASET_ARTIFACT_CLASSES
+        ][:5]
+
+        return {
+            "status": "analysis_complete",
+            "finding_type": "condition_detected",
+            "is_negative_finding": False,
+            "disease": display,
+            "score": round(top_score, 4),
+            "predictions": formatted_preds,
+        }
+
     def _get_xray_diagnosis(self, predictions):
+        """Backward-compatible helper wrapping _interpret_xray_predictions."""
+        res = self._interpret_xray_predictions(predictions, predictions[0]["confidence"] if predictions else 0.0)
+        return res.get("disease"), res.get("score", 0.0)
+
+    def _interpret_predictions(self, category: str, predictions: list, raw_conf: float):
         """
-        For X-ray model: extract the actual medical condition.
-        The X-ray model has body-part classes (elbow, wrist) AND condition classes
-        (fracture, pneumonia). We need the condition, not the body part.
-        
-        Strategy: 
-        - If 'fracture' or 'pneumonia' appears in top predictions, return it
-        - If only body parts appear, combine body part + "abnormality detected"
-        - Check relative confidence between body part and condition
+        Safely interpret predictions from specialist models.
+        Enforces:
+        - Highest-ranked valid negative class preserved (never promoted past).
+        - Highest-ranked artifact class triggers inconclusive status (never promoted past).
+        - Clean formatting of differential predictions.
         """
-        conditions = []
-        body_parts = []
+        if category == "xray":
+            return self._interpret_xray_predictions(predictions, raw_conf)
 
-        for p in predictions:
-            name = p["disease"].lower().strip()
-            if name in GARBAGE_CLASSES:
-                continue
-            if name in XRAY_CONDITIONS:
-                conditions.append(p)
-            elif name in XRAY_BODY_PARTS:
-                body_parts.append(p)
+        if not predictions:
+            return {
+                "status": "inconclusive",
+                "reason": "empty_predictions",
+                "message": "Model returned no predictions.",
+                "disease": None,
+                "score": 0.0,
+                "predictions": [],
+            }
 
-        if conditions:
-            # Return the top condition
-            best = conditions[0]
-            # If we also know the body part, make it more descriptive
-            if body_parts:
-                part = body_parts[0]["disease"].title()
-                cond = best["disease"].title()
-                return f"{part} {cond}", best["confidence"]
-            return best["disease"].title(), best["confidence"]
+        top_p = predictions[0]
+        top_name = top_p["disease"].lower().strip()
+        top_score = float(top_p["confidence"])
 
-        if body_parts:
-            # Only body parts detected — model sees the anatomy but
-            # can't determine the specific condition with high confidence
-            part = body_parts[0]["disease"].title()
-            return f"{part} X-ray — Abnormality Detected", body_parts[0]["confidence"]
+        # Check if top prediction is an invalid artifact
+        if top_name in DATASET_ARTIFACT_CLASSES:
+            return {
+                "status": "inconclusive",
+                "reason": "top_prediction_is_artifact",
+                "message": (
+                    "The highest-ranked model prediction is an unvalidated dataset artifact. "
+                    "Automatic promotion of lower-ranked conditions is suppressed."
+                ),
+                "artifact_class": top_p["disease"],
+                "disease": None,
+                "score": 0.0,
+                "predictions": [],
+            }
 
-        return None, 0.0
+        # Check if top prediction is a legitimate normal or negative finding
+        if top_name in VALID_NEGATIVE_CLASSES:
+            display = self._format_disease(category, top_p["disease"])
+            formatted_preds = [
+                {
+                    "disease": self._format_disease(category, p["disease"]),
+                    "score": round(float(p["confidence"]), 4),
+                    "confidence": round(float(p["confidence"]), 4),
+                }
+                for p in predictions
+                if p["disease"].lower().strip() not in DATASET_ARTIFACT_CLASSES
+            ][:5]
+
+            return {
+                "status": "analysis_complete",
+                "finding_type": "normal_or_negative",
+                "is_negative_finding": True,
+                "disease": display,
+                "raw_prediction": top_p["disease"],
+                "score": round(top_score, 4),
+                "clinical_note": (
+                    f"Model identified features matching '{display}'. "
+                    "This is an uncalibrated algorithmic output and does not establish medical health or rule out clinical conditions."
+                ),
+                "predictions": formatted_preds,
+            }
+
+        # Top prediction is a condition / pathology
+        display = self._format_disease(category, top_p["disease"])
+        formatted_preds = [
+            {
+                "disease": self._format_disease(category, p["disease"]),
+                "score": round(float(p["confidence"]), 4),
+                "confidence": round(float(p["confidence"]), 4),
+            }
+            for p in predictions
+            if p["disease"].lower().strip() not in DATASET_ARTIFACT_CLASSES
+        ][:5]
+
+        return {
+            "status": "analysis_complete",
+            "finding_type": "condition_detected",
+            "is_negative_finding": False,
+            "disease": display,
+            "raw_prediction": top_p["disease"],
+            "score": round(top_score, 4),
+            "predictions": formatted_preds,
+        }
 
     # ── main entry point ──────────────────────────────────────
 
-    def classify(self, image: Image.Image, routed_category: str = None):
+    def classify(self, image: Image.Image, routed_category: str = None) -> dict:
         """
-        CLIP-routed classification with hard modality lock.
+        CLIP-routed classification with strict, hard modality locking.
 
-        1. CLIP determines what type of image this is
-        2. Only the matching specialist model runs
-        3. No cross-contamination between domains
-        4. Non-medical images are flagged for BLIP fallback
+        Guarantees:
+        1. Only the matching specialist model executes (no cross-modality contamination).
+        2. Missing specialist models return 'model_unavailable' (never fall back to general or all).
+        3. Non-medical images return 'unsupported_image' without running medical disease models.
+        4. Ambiguous or failed CLIP results return 'inconclusive'.
+        5. Valid normal/negative classes are preserved as top findings without disease promotion.
+        6. Top artifact predictions return 'inconclusive' without disease promotion.
+        7. Model scores are explicitly uncalibrated (false confidence claims removed).
         """
-        empty = {
-            "disease": None, "category": "non_medical",
-            "confidence": 0.0, "calibrated_conf": 0.0,
-            "predictions": [], "all_results": {},
-            "domain_hint": "non_medical", "domain_scores": {},
-        }
-
-        if not self.models:
-            return empty
+        if image is None:
+            return {
+                "status": "invalid_image",
+                "message": "No valid image provided for classification.",
+                "category": None,
+                "disease": None,
+                "score": 0.0,
+                "confidence": 0.0,
+                "calibrated_conf": None,
+                "calibrated_confidence": None,
+                "predictions": [],
+                "domain_hint": "unknown",
+                "domain_scores": {},
+                "domain_confidence": 0.0,
+            }
 
         # ── 1. CLIP domain detection ──────────────────────────
         domain, domain_conf, domain_scores = detect_visual_domain(image)
+        logger.info(f"CLIP domain detection: {domain} (conf={domain_conf:.3f})")
 
-        logger.info(f"CLIP domain: {domain} (conf={domain_conf:.3f})")
-
-
-        # If CLIP says non-medical with high confidence, skip all models
-        if domain == "non_medical" and domain_conf > 0.40:
-            logger.info("Image classified as non-medical -- skipping disease models")
-            empty["domain_hint"] = "non_medical"
-            empty["domain_scores"] = domain_scores
-            empty["domain_confidence"] = round(domain_conf, 4)
-            return empty
-
-        # ── 2. Determine which model to run ────────────────
-        # HARD MODALITY LOCK: Only run the matching specialist model.
-        # This eliminates cross-contamination entirely.
-        models_to_run = []
-
-        if domain in self.models:
-            models_to_run.append(domain)
-        else:
-            # Domain model not loaded! 
-            # We DONT want to silently fallback to general because it will
-            # give wrong diagnoses (e.g. skin image used with general model).
-            logger.critical(f"HARD MODALITY LOCK: Domain '{domain}' detected, but specialist model NOT LOADED.")
-            
-            if "general" in self.models:
-                # If it's borderline or common enough, we might still want general 
-                # but we SHOULD warn the user that they are in a degraded state.
-                models_to_run.append("general")
-                logger.warning(f"Falling back to 'general' model for domain '{domain}' (DEGRADED STATE)")
-
-        # Safety: if somehow no models to run, run all
-        if not models_to_run:
-            models_to_run = list(self.models.keys())
-            logger.warning(f"No model for domain '{domain}', running all models")
-
-        # ── 3. Run selected model(s) ─────────────────────────
-        all_results = {}
-        primary_result = None
-
-        for cat in models_to_run:
-            model = self.models[cat]
-            try:
-                preds, raw_conf = model.predict(image)
-                if not preds:
-                    all_results[cat] = {"error": "empty"}
-                    continue
-
-                # Special handling for X-ray model
-                if cat == "xray":
-                    disease_name, disease_conf = self._get_xray_diagnosis(preds)
-                else:
-                    disease_name, disease_conf = self._first_clean_prediction(preds)
-
-                all_results[cat] = {
-                    "top_disease": disease_name or preds[0]["disease"],
-                    "top_confidence": disease_conf or raw_conf,
-                    "predictions": preds,
-                }
-
-                if disease_name is None:
-                    all_results[cat]["note"] = "all garbage classes"
-                    continue
-
-                logger.info(
-                    f"  [{cat}] {disease_name} (conf={disease_conf:.4f})"
-                )
-
-                # Skip predictions with extremely low confidence (noise)
-                MIN_CONFIDENCE = 0.02
-                if disease_conf < MIN_CONFIDENCE:
-                    logger.info(f"  [{cat}] Confidence {disease_conf:.4f} below threshold {MIN_CONFIDENCE}, skipping")
-                    all_results[cat]["note"] = f"below min confidence ({disease_conf:.4f})"
-                    continue
-
-                # The PRIMARY model (matching domain) always wins
-                if cat == domain and primary_result is None:
-                    primary_result = {
-                        "disease": disease_name,
-                        "category": cat,
-                        "confidence": disease_conf,
-                        "predictions": preds,
-                    }
-                elif primary_result is None:
-                    # General model as fallback only if domain model doesn't exist
-                    primary_result = {
-                        "disease": disease_name,
-                        "category": cat,
-                        "confidence": disease_conf,
-                        "predictions": preds,
-                    }
-
-            except Exception as e:
-                logger.error(f"Error running {cat} model: {e}")
-                all_results[cat] = {"error": str(e)}
-
-        # ── 4. Format output ──────────────────────────────────
-        if primary_result is None:
-            # All models failed or returned garbage — but CLIP said it's medical.
-            # Still return medical category so BLIP doesn't trigger.
-            logger.warning("All models returned garbage/low-conf but CLIP detected medical image")
+        # Non-medical image detection
+        if domain == "non_medical" and domain_conf >= 0.40:
+            logger.info("Image classified as non-medical — skipping disease models")
             return {
-                "disease": "Unrecognized Medical Condition",
-                "category": domain,
+                "status": "unsupported_image",
+                "message": "The uploaded image does not appear to be a supported medical image.",
+                "category": "non_medical",
+                "disease": None,
+                "score": 0.0,
                 "confidence": 0.0,
-                "calibrated_conf": 0.0,
+                "calibrated_conf": None,
+                "calibrated_confidence": None,
+                "domain_hint": "non_medical",
+                "domain_scores": domain_scores,
+                "domain_confidence": round(domain_conf, 4),
                 "predictions": [],
-                "all_results": all_results,
+            }
+
+        # Ambiguous or failed CLIP domain
+        if domain in ("unknown", "ambiguous"):
+            logger.warning("Modality could not be reliably determined from visual features: %s", domain)
+            return {
+                "status": "inconclusive",
+                "message": "Image modality could not be reliably determined from visual features.",
+                "category": domain,
+                "disease": None,
+                "score": 0.0,
+                "confidence": 0.0,
+                "calibrated_conf": None,
+                "calibrated_confidence": None,
                 "domain_hint": domain,
                 "domain_scores": domain_scores,
                 "domain_confidence": round(domain_conf, 4),
+                "predictions": [],
             }
 
-        display_name = self._format_disease(
-            primary_result["category"], primary_result["disease"]
-        )
+        # ── 2. Determine target modality with routed_category validation ──
+        target_category = domain
+        if routed_category:
+            routed_clean = routed_category.lower().strip()
+            if routed_clean in ("skin", "xray", "retina", "general"):
+                if domain == "non_medical" and domain_conf >= 0.45:
+                    return {
+                        "status": "unsupported_image",
+                        "message": "Uploaded image is non-medical; user-requested modality override rejected.",
+                        "category": "non_medical",
+                        "disease": None,
+                        "score": 0.0,
+                        "confidence": 0.0,
+                        "calibrated_conf": None,
+                        "calibrated_confidence": None,
+                        "domain_hint": "non_medical",
+                        "domain_scores": domain_scores,
+                        "domain_confidence": round(domain_conf, 4),
+                        "predictions": [],
+                    }
+                # Guard against conflicting distinct modalities (e.g. xray vs retina)
+                if domain != "general" and routed_clean != domain and domain_conf >= 0.60:
+                    logger.warning(
+                        "Modality conflict: image detected as %s (conf=%.3f) but requested as %s",
+                        domain, domain_conf, routed_clean
+                    )
+                    return {
+                        "status": "inconclusive",
+                        "message": (
+                            f"Modality conflict: detected visual domain is '{domain}' but requested "
+                            f"modality was '{routed_clean}'. Cross-modality inference prevented."
+                        ),
+                        "category": domain,
+                        "disease": None,
+                        "score": 0.0,
+                        "confidence": 0.0,
+                        "calibrated_conf": None,
+                        "calibrated_confidence": None,
+                        "domain_hint": domain,
+                        "domain_scores": domain_scores,
+                        "domain_confidence": round(domain_conf, 4),
+                        "predictions": [],
+                    }
+                target_category = routed_clean
 
-        # Format top-3 predictions (excluding garbage)
-        fmt_preds = []
-        for p in primary_result["predictions"][:5]:
-            d = p["disease"].lower().strip()
-            if d not in GARBAGE_CLASSES:
-                # For X-ray, skip body-part-only predictions in the list
-                if primary_result["category"] == "xray" and d in XRAY_BODY_PARTS:
-                    continue
-                fmt_preds.append({
-                    "disease": self._format_disease(primary_result["category"], p["disease"]),
-                    "confidence": p["confidence"],
-                })
-            if len(fmt_preds) >= 3:
-                break
+        # ── 3. HARD MODALITY LOCK: Check model availability ──
+        if target_category not in self.models:
+            logger.warning(
+                "HARD MODALITY LOCK: Domain '%s' detected, but specialist model NOT LOADED. "
+                "Refusing unsafe fallback to general or other models.",
+                target_category
+            )
+            return {
+                "status": "model_unavailable",
+                "message": f"Specialist AI model for '{target_category}' is not loaded on this server.",
+                "category": target_category,
+                "disease": None,
+                "score": 0.0,
+                "confidence": 0.0,
+                "calibrated_conf": None,
+                "calibrated_confidence": None,
+                "domain_hint": domain,
+                "domain_scores": domain_scores,
+                "domain_confidence": round(domain_conf, 4),
+                "predictions": [],
+            }
 
-        logger.info(
-            f"DIAGNOSIS: {primary_result['category']} -> {display_name} "
-            f"(conf={primary_result['confidence']:.4f}, domain_conf={domain_conf:.3f})"
-        )
+        # ── 4. Execute ONLY the matching specialist model ──
+        model = self.models[target_category]
+        try:
+            preds, raw_conf = model.predict(image)
+        except Exception as e:
+            logger.error("Inference error in '%s' specialist model: %s", target_category, e)
+            return {
+                "status": "inconclusive",
+                "message": f"An error occurred during {target_category} model inference.",
+                "category": target_category,
+                "disease": None,
+                "score": 0.0,
+                "confidence": 0.0,
+                "calibrated_conf": None,
+                "calibrated_confidence": None,
+                "domain_hint": domain,
+                "domain_scores": domain_scores,
+                "domain_confidence": round(domain_conf, 4),
+                "predictions": [],
+                "error": "Inference failure",
+            }
 
-        return {
-            "disease": display_name,
-            "category": primary_result["category"],
-            "confidence": primary_result["confidence"],
-            "calibrated_conf": primary_result["confidence"],  # No cross-model scoring needed
-            "predictions": fmt_preds,
-            "all_results": all_results,
-            "domain_hint": domain,
-            "domain_scores": domain_scores,
-            "domain_confidence": round(domain_conf, 4),
-        }
+        # ── 5. Safe, uncalibrated prediction interpretation ──
+        interp = self._interpret_predictions(target_category, preds, raw_conf)
+        interp["category"] = target_category
+        interp["domain_hint"] = domain
+        interp["domain_scores"] = domain_scores
+        interp["domain_confidence"] = round(domain_conf, 4)
+        interp["confidence"] = interp.get("score", 0.0)  # Deprecated alias for raw score
+        interp["calibrated_conf"] = None  # Deprecated
+        interp["calibrated_confidence"] = None  # Deprecated
+        interp["score_interpretation"] = "Unvalidated model score; not a calibrated clinical probability."
+        return interp
 
 
 # Module-level singleton

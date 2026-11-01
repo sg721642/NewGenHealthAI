@@ -14,8 +14,9 @@
 | Phase 1C commit | `bbeb67c5eb1e4e728b4d8ad5632f656b9e8e125a` |
 | Phase 1C.1 commit | `d4bc0c14a699b3a37fae0b38839b7ba944503d04` |
 | Phase 1D commit | `256c86d649d0dd67c916892664d7f41d7919fabc` |
+| Phase 2A commit | Pending verification & push |
 
-| Current phase | Phase 1D — Conversation Memory Isolation, Concurrency and Persistence |
+| Current phase | Phase 2A — Critical Image-Classification Correctness and Safe Inference |
 
 | Git identity | `sg721642 <sg721642@gmail.com>` |
 | Maintainer | Satyam Gupta |
@@ -31,7 +32,7 @@
 
 ## Current Phase
 
-**Phase 1D — Conversation Memory Isolation, Concurrency and Persistence** ✅ Complete
+**Phase 2A — Critical Image-Classification Correctness and Safe Inference** ✅ Complete
 
 ## Completed Tasks
 
@@ -94,12 +95,22 @@
 - [x] **Step-Wise Atomic Schema Migration Resilience**: Verified and hardened migration runner (`migrations.py`) where steps v1 and v2 execute inside independent `engine.begin()` blocks, each updating `schema_versions` atomically for safe crash resumption.
 - [x] **Comprehensive Concurrency & Memory Test Suite**: Added 15 new automated regression tests in `test_phase1d_concurrency.py` (total 139 passed, 1 skipped) and 2 new frontend tests in `App.test.jsx` (6/6 passing).
 
+### Phase 2A
+- [x] **Separation of Dataset Artifacts from Normal Findings (A03)**: Separated `GARBAGE_CLASSES` into `DATASET_ARTIFACT_CLASSES` (non-medical strings, filesystem paths, split names) and `VALID_NEGATIVE_CLASSES` (`normal`, `normal cases`, `notumor`, `notinfected`, `uninfected`, `non-covid`, `benign`, `bengin cases`, `healthy eye`).
+- [x] **Preservation of Valid Negative Classes & Disease Suppression (A03)**: Preserved normal reference findings as top findings without promoting lower-ranked conditions (`normal=0.96`, `pneumonia=0.04` returns `status="analysis_complete"`, `finding_type="normal_or_negative"`, with explicit disclaimers; no pneumonia diagnosis).
+- [x] **X-ray Anatomy Distinction (A03)**: Refactored `_interpret_xray_predictions` to interpret body-part predictions (`wrist`, `elbow`, `finger`, `forearm`, `hand`, `humerus`, `shoulder`) as anatomical locations (`finding_type="anatomy_identified"`), strictly never fabricating fractures or manufacturing "Abnormality Detected".
+- [x] **Top Artifact Inconclusive Handling (A03)**: Highest-ranked artifact predictions (`preview`, `train`, `val`, `cropped`, etc.) safely return `status="inconclusive"` and suppress lower-ranked condition promotion.
+- [x] **Hard Modality Lock & Zero Fallback (A04)**: Enforced strict single-model execution matching CLIP domain (`skin`, `xray`, `retina`, `general`). Eliminated all fallback to `general` and running all models. Missing specialist model returns `status="model_unavailable"` (HTTP 503).
+- [x] **Non-Medical & Ambiguous Image Handling (A04)**: Non-medical imagery safely returns `status="unsupported_image"` (HTTP 422) without invoking medical disease classifiers. Failed or ambiguous CLIP detections return `status="inconclusive"` (HTTP 200).
+- [x] **Elimination of False Confidence Calibration (A04)**: Removed misleading `calibrated_confidence` calculations; returned uncalibrated raw model scores (`score`), with clear UI label `"Model Finding"` and `"Uncalibrated Model Score: X.XXXX"` alongside research prototype disclaimers.
+- [x] **Comprehensive Offline Test Matrix & Frontend Tests**: Created `test_phase2a_image_classifier.py` covering the full 20-scenario offline matrix (36 tests passed). Added 5 vitest image integration tests covering all 5 response statuses (11/11 passed).
+
 ## Verification Outcomes
 
 | Layer | Check | Tests | Exit Code | Result |
 |---|---|---|---|---|
-| Backend | Pytest (`test_agents`, `test_api`, `test_api_edge_cases`, `test_app`, `test_auth_hardening`, `test_coverage_gaps`, `test_database`, `test_logging`, `test_phase1c1_hardening`, `test_phase1d_concurrency`, `test_security_ownership`, `test_services`, `test_tools`, `test_workflow`, `test_workflow_routing`) | 139 / 140 (1 skipped) | 0 | ✅ Pass (0 failures) |
-| Frontend | Vitest integration (`App.test.jsx`) | 6 / 6 | 0 | ✅ Pass (0 failures) |
+| Backend | Pytest (`test_agents`, `test_api`, `test_api_edge_cases`, `test_app`, `test_auth_hardening`, `test_coverage_gaps`, `test_database`, `test_logging`, `test_phase1c1_hardening`, `test_phase1d_concurrency`, `test_phase2a_image_classifier`, `test_security_ownership`, `test_services`, `test_tools`, `test_workflow`, `test_workflow_routing`) | 175 / 176 (1 skipped) | 0 | ✅ Pass (0 failures) |
+| Frontend | Vitest integration (`App.test.jsx`) | 11 / 11 | 0 | ✅ Pass (0 failures) |
 | Frontend | Linter (`npm --prefix frontend run lint`) | 0 errors, 0 warnings | 0 | ✅ Pass (100% clean) |
 | Frontend | Build (`npm --prefix frontend run build`) | Vite bundle | 0 | ✅ Pass |
 
@@ -122,7 +133,6 @@
 
 | Phase | Focus Areas | Findings |
 |---|---|---|
-| Phase 2A | Classifier garbage classes, modality lock correctness, calibrated confidence | A03, A04 |
 | Phase 2B | Workflow cycle termination, LangGraph attempt limits | A05 |
 | Phase 2C | Lazy model loading lifecycle, Dockerfile alignment, run.py cleanup | A09, A12, A14 |
 | Phase 3 | Dependency hygiene, requirements alignment, clinical AI disclaimers | A13, A17 |
