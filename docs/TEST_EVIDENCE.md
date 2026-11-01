@@ -1302,7 +1302,11 @@ Evaluation of all 12 model and external provider integration points:
   - Replaced response payload echoing with HTTP status code assertions (`SESS_STATUS=200`).
   - Added explicit `exit 1` if container health polling loop exceeds 30 attempts (60s).
   - Changed log collection from `if: always()` to `if: failure()`, keeping successful CI logs clean.
-- **Verification**: Verified via local syntax check, dry runs, and GitHub Actions workflow execution.
+- **Verification**: Verified via GitHub Actions run [41330625694](https://github.com/sg721642/NewGenHealthAI/actions/runs/41330625694) (Job ID: `124919752717`).
+  - Build Duration: 3m 45s
+  - Exit Code: 0 (All steps passed)
+  - Zero Leaks: Step `Smoke-Test Authentication & Session Lifecycle` logged `Synthetic user registered successfully; bearer token acquired (redacted, length: 43)` with 0 cleartext tokens or raw payloads printed.
+  - Diagnostics Step: Automatically skipped on clean success (`Collect Container Diagnostics on Failure`).
 
 ### 2. Backend Regression Suite (Pytest via root `pytest.ini`)
 Command:
