@@ -339,4 +339,61 @@ describe('App Integration', () => {
             expect(screen.getByText(/Image modality could not be reliably determined/)).toBeInTheDocument();
         });
     });
+
+    it('handles microphone permission denial gracefully', async () => {
+        const originalAlert = window.alert;
+        const mockAlert = vi.fn();
+        window.alert = mockAlert;
+
+        const originalMediaDevices = navigator.mediaDevices;
+        Object.defineProperty(navigator, 'mediaDevices', {
+            value: {
+                getUserMedia: vi.fn().mockRejectedValue({ name: 'NotAllowedError', message: 'Permission denied' }),
+            },
+            configurable: true,
+        });
+
+        render(<App />);
+
+        const micButton = screen.getByTitle('Voice input — click to speak');
+        fireEvent.click(micButton);
+
+        await waitFor(() => {
+            expect(mockAlert).toHaveBeenCalledWith(expect.stringContaining('Microphone access denied'));
+        });
+
+        window.alert = originalAlert;
+        Object.defineProperty(navigator, 'mediaDevices', {
+            value: originalMediaDevices,
+            configurable: true,
+        });
+    });
+
+    it('handles unsupported browser media devices gracefully', async () => {
+        const originalAlert = window.alert;
+        const mockAlert = vi.fn();
+        window.alert = mockAlert;
+
+        const originalMediaDevices = navigator.mediaDevices;
+        Object.defineProperty(navigator, 'mediaDevices', {
+            value: undefined,
+            configurable: true,
+        });
+
+        render(<App />);
+
+        const micButton = screen.getByTitle('Voice input — click to speak');
+        fireEvent.click(micButton);
+
+        await waitFor(() => {
+            expect(mockAlert).toHaveBeenCalledWith(expect.stringContaining('not supported by your browser'));
+        });
+
+        window.alert = originalAlert;
+        Object.defineProperty(navigator, 'mediaDevices', {
+            value: originalMediaDevices,
+            configurable: true,
+        });
+    });
 });
+

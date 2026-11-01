@@ -18,10 +18,10 @@
 | Phase 2B commit | `0995690914b44fe496c2277c1e56181fac82a52c` |
 | Phase 2B.1 commit | `01a574a470edc880c99b6742b2bf0ae65b1ab4ec` |
 | Phase 3A commit | `5a4427f2c34e24a7bd189b1e8b6e5c143dde6454` |
+| Phase 3B commit | Pending commit |
 
-| Current phase | Phase 3A — Secure Image Uploads, Model Loading and Resource Protection |
-
-
+| Current phase | Phase 3B — Secure Voice Processing, Reliable STT/TTS and Resource Protection |
+| Next phase | Phase 4 — branding cleanup, PDF/documentation corrections and repository/deployment consistency |
 
 | Git identity | `sg721642 <sg721642@gmail.com>` |
 | Maintainer | Satyam Gupta |
@@ -37,8 +37,7 @@
 
 ## Current Phase
 
-**Phase 3A — Secure Image Uploads, Model Loading and Resource Protection** ✅ Complete
-
+**Phase 3B — Secure Voice Processing, Reliable STT/TTS and Resource Protection** ✅ Complete
 
 ## Completed Tasks
 
@@ -151,16 +150,28 @@
 - [x] **Operational Diagnostics Privacy**: Sanitized `/api/v1/diagnostics` to remove `base_dir`, filesystem paths, server device internals, and stack traces.
 - [x] **Comprehensive Phase 3A Test Suite**: Added 27 new automated integration tests in `test_phase3a_image_security.py` (total backend suite: 256/256 passing, 0 skipped, 0 failed).
 
+### Phase 3B
+- [x] **Chunked Audio Upload & Size Validation (A07)**: Implemented chunked streaming upload (64KB chunks) in `audio_preprocess.py`, enforcing `MAX_AUDIO_UPLOAD_BYTES` (10MB default) and `MIN_AUDIO_UPLOAD_BYTES` (500B), aborting oversized and undersized payloads before decoding.
+- [x] **Audio Container & Magic Byte Verification (A07)**: Enforced signature validation for WAV (`RIFF....WAVE`), WebM (`\x1a\x45\xdf\xa3`), OGG (`OggS`), MP3 (`ID3` or sync frame `0xFF\xFB`), M4A (`ftyp`), and FLAC (`fLaC`), rejecting forged MIME types, non-audio files, and corrupted streams with HTTP 400.
+- [x] **WAV Header Duration Bounds (A07)**: Implemented `probe_wav_duration_seconds` to safely inspect WAV headers and enforce `MAX_AUDIO_DURATION_SECONDS` (300s / 5 min), rejecting excessively long audio files.
+- [x] **Private Temporary File Lifecycle (A07)**: Isolated temporary audio files in secure directories created via `tempfile.mkdtemp(prefix="ngh_voice_")` with `0o700` directory and `0o600` file permissions; guaranteed deterministic deletion in `finally:` blocks without leaking absolute filesystem paths to clients or logs.
+- [x] **Non-Blocking AsyncGroq & Fallback Progression (A07)**: Replaced blocking synchronous `Groq` calls with native `AsyncGroq(timeout=15s)`; wrapped transcription execution with overall timeout `STT_OVERALL_DEADLINE_SECONDS` (30s default) via `asyncio.wait_for`; enforced fallback from primary `whisper-large-v3-turbo` to `whisper-large-v3` on transient failures (429, 500, 502, 503, 504); failed fast on client/auth errors (400, 401) without retry.
+- [x] **Fail-Closed Transcription Safety (A07)**: Never fabricated synthetic transcripts or simulated text on STT failure; returned appropriate HTTP 503 Service Unavailable or 504 Gateway Timeout.
+- [x] **Process-Local Voice Capacity Manager (A07)**: Built `VoiceCapacityManager` with separate bounded semaphores for STT (`MAX_CONCURRENT_STT=3`) and TTS (`MAX_CONCURRENT_TTS=5`), queue wait timeout (`VOICE_QUEUE_TIMEOUT_SECONDS=5.0s` -> HTTP 503), per-user concurrency limit (max 1 active STT or TTS request -> HTTP 429), and auto-releasing `VoicePermit` across errors, timeouts, disconnects, and cancellations.
+- [x] **Hardened TTS Synthesis & Streaming (A08)**: POST `/api/v1/voice/tts` with JSON body enforcing length boundaries (`min_length=2`, `max_length=MAX_TTS_INPUT_CHARS=2000`), stripping markdown syntax before synthesis, validating neural voices against language-keyed allowlists, setting anti-caching headers (`Cache-Control: no-store, no-cache`), and handling client disconnects cleanly in generator `finally:` blocks.
+- [x] **Sensitive Voice Log Redaction (A08)**: Redacted user filenames, raw transcripts, spoken text, audio payloads, and exception string details from server logs; logged only byte counts, character counts, language codes, and exception class names.
+- [x] **Frontend Voice Lifecycle Management**: Integrated `AbortController` in `App.jsx` for both STT and TTS requests; aborted in-flight synthesis and transcription on consultation switch, logout, unmount, or toggle; cleanly stopped microphone tracks on recording stop/unmount; handled microphone permission denial and unsupported browser environments gracefully.
+- [x] **Section 11 Follow-up Verifications**: Documented that `asyncio.to_thread` bounds event loop response wait without forcibly terminating synchronous worker thread sockets; verified that Phase 3A lazy model loading applies to `.pth` weight checkpoints while module-level framework imports (`torch`) occur on import; retained A02 real async clear/delete integration test gap.
+- [x] **Comprehensive Phase 3B Test Suite**: Added 29 new automated tests in `test_phase3b_voice_security.py` (total backend suite: 285/285 passing, 0 skipped, 0 failed) and 2 new frontend tests in `App.test.jsx` (13/13 passing).
+
 ## Verification Outcomes
 
 | Layer | Check | Tests | Exit Code | Result |
 |---|---|---|---|---|
-| Backend | Pytest (Full 19-module suite including `test_phase3a_image_security`, `test_phase2b1_corrections`, `test_phase2b_workflow_safety`, `test_phase2a_image_classifier`, `test_phase1d_concurrency`) | 256 / 256 (0 skipped) | 0 | ✅ Pass (100% passing) |
-| Frontend | Vitest integration (`App.test.jsx`) | 11 / 11 | 0 | ✅ Pass (0 failures) |
+| Backend | Pytest (Full 20-module suite including `test_phase3b_voice_security`, `test_phase3a_image_security`, `test_phase2b1_corrections`, `test_phase2b_workflow_safety`, `test_phase2a_image_classifier`, `test_phase1d_concurrency`) | 285 / 285 (0 skipped) | 0 | ✅ Pass (100% passing) |
+| Frontend | Vitest integration (`App.test.jsx`) | 13 / 13 | 0 | ✅ Pass (0 failures) |
 | Frontend | Linter (`npm --prefix frontend run lint`) | 0 errors, 0 warnings | 0 | ✅ Pass (100% clean) |
 | Frontend | Build (`npm --prefix frontend run build`) | Vite bundle | 0 | ✅ Pass |
-
-
 
 ## Database Migration Status
 
@@ -173,15 +184,14 @@
 
 ## Blockers & Limitations
 
-1. **Heavy Inference Tests**: Full offline vision model inference requires pre-downloaded weights (Phase 3).
+1. **Heavy Inference Tests**: Full offline vision model inference requires pre-downloaded weights.
 2. **Docker Daemon**: Host machine lacks Docker engine; container builds execute via CI / Hugging Face Spaces.
-3. **Single-Process Rate Limiter**: `BoundedRateLimiter` is in-memory per worker; horizontal scaling with multi-worker Uvicorn/Gunicorn requires Redis-backed storage as documented in `docs/DEPLOYMENT_RUNBOOK.md`.
+3. **Single-Process Rate Limiter & Capacity**: `BoundedRateLimiter` and `VoiceCapacityManager` are in-memory per worker; horizontal scaling with multi-worker Uvicorn/Gunicorn requires Redis-backed storage as documented in `docs/DEPLOYMENT_RUNBOOK.md`.
+4. **Synchronous Worker Thread Sockets**: `asyncio.to_thread` guarantees event-loop return on timeout (504 Gateway Timeout), but underlying C network sockets in worker threads cannot be forcibly killed by Python runtime.
 
 ## Remaining Phases
 
 | Phase | Focus Areas | Findings |
 |---|---|---|
-| Phase 2C | Lazy model loading lifecycle, Dockerfile alignment, run.py cleanup | A09, A12, A14 |
-| Phase 3 | Dependency hygiene, requirements alignment, clinical AI disclaimers | A13 |
-| Phase 4 | End-to-end multi-user verification gates | All gates |
-| Phase 5 | Hugging Face Spaces deployment & validation | Production |
+| Phase 4 | Branding cleanup, PDF/documentation corrections, repository/deployment consistency | A16, A12, A13, A14 |
+| Phase 5 | End-to-end multi-user verification gates & Hugging Face Spaces deployment | Production gates |

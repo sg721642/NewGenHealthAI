@@ -1633,6 +1633,7 @@ function MessageBubble({ msg, onFollowUpClick }) {
   const [isSpeaking, setIsSpeaking] = useState(false);
   const audioRef = useRef(null);
   const blobUrlRef = useRef(null);
+  const ttsAbortRef = useRef(null);
 
   const copyText = useCallback(() => {
     navigator.clipboard.writeText(msg.content).catch(() => {});
@@ -1640,10 +1641,16 @@ function MessageBubble({ msg, onFollowUpClick }) {
 
   // TTS: Speak this message
   const speakMessage = useCallback(async () => {
-    // If already speaking, stop
-    if (isSpeaking && audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.currentTime = 0;
+    // If already speaking or fetching, stop and abort
+    if (isSpeaking) {
+      if (ttsAbortRef.current) {
+        ttsAbortRef.current.abort();
+        ttsAbortRef.current = null;
+      }
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.currentTime = 0;
+      }
       setIsSpeaking(false);
       if (blobUrlRef.current) {
         URL.revokeObjectURL(blobUrlRef.current);
@@ -1658,6 +1665,9 @@ function MessageBubble({ msg, onFollowUpClick }) {
         blobUrlRef.current = null;
       }
       const token = localStorage.getItem('auth_token');
+      const abortCtrl = new AbortController();
+      ttsAbortRef.current = abortCtrl;
+
       const res = await fetch('/api/v1/voice/tts', {
         method: 'POST',
         headers: {
@@ -1665,6 +1675,7 @@ function MessageBubble({ msg, onFollowUpClick }) {
           ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({ text: msg.content.substring(0, 2000) }),
+        signal: abortCtrl.signal,
       });
       if (!res.ok) throw new Error(`TTS failed: ${res.status}`);
       const audioBlob = await res.blob();
@@ -1688,18 +1699,26 @@ function MessageBubble({ msg, onFollowUpClick }) {
       };
       await audio.play();
     } catch (err) {
-      console.error('TTS playback failed:', err);
+      if (err.name !== 'AbortError') {
+        console.error('TTS playback failed:', err);
+      }
       setIsSpeaking(false);
       if (blobUrlRef.current) {
         URL.revokeObjectURL(blobUrlRef.current);
         blobUrlRef.current = null;
       }
+    } finally {
+      ttsAbortRef.current = null;
     }
   }, [msg.content, isSpeaking]);
 
-  // Cleanup audio on unmount
+  // Cleanup audio and in-flight fetch on unmount
   useEffect(() => {
     return () => {
+      if (ttsAbortRef.current) {
+        ttsAbortRef.current.abort();
+        ttsAbortRef.current = null;
+      }
       if (audioRef.current) {
         audioRef.current.pause();
         audioRef.current = null;
@@ -1795,7 +1814,7 @@ function MessageBubble({ msg, onFollowUpClick }) {
 // ═══════════════════════════════════════════════════════════════
 //  SECTION 5 — INPUT AREA (with Voice Input via Groq Whisper)
 // ═══════════════════════════════════════════════════════════════
-function InputArea({ inputValue, setInputValue, onSend, isTyping, inputRef, onImageUpload }) {
+function InputArea({ inputValue, setInputValue, onSend, isTyping, inputRef, onImageUpload, currentSessionId }) {
   const [voiceState, setVoiceState] = useState('idle'); // idle | recording | transcribing
   const [recordingTime, setRecordingTime] = useState(0);
   const mediaRecorderRef = useRef(null);
@@ -1803,6 +1822,7 @@ function InputArea({ inputValue, setInputValue, onSend, isTyping, inputRef, onIm
   const streamRef = useRef(null);
   const timerRef = useRef(null);
   const elapsedRef = useRef(0);
+  const sttAbortRef = useRef(null);
 
   const handleKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend(); }
@@ -1813,17 +1833,41 @@ function InputArea({ inputValue, setInputValue, onSend, isTyping, inputRef, onIm
     e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
   };
 
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-      if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
-    };
+  // Cleanup on unmount or session switch
+  const cleanupVoiceResources = useCallback(() => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+    if (sttAbortRef.current) {
+      sttAbortRef.current.abort();
+      sttAbortRef.current = null;
+    }
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      try { mediaRecorderRef.current.stop(); } catch { /* ignore */ }
+    }
+    if (streamRef.current) {
+      try { streamRef.current.getTracks().forEach(t => t.stop()); } catch { /* ignore */ }
+      streamRef.current = null;
+    }
+    setVoiceState('idle');
+    setRecordingTime(0);
   }, []);
+
+  useEffect(() => {
+    return cleanupVoiceResources;
+  }, [cleanupVoiceResources]);
+
+  // Clean up voice recording/transcription whenever consultation/session changes
+  useEffect(() => {
+    cleanupVoiceResources();
+  }, [currentSessionId, cleanupVoiceResources]);
 
   // ── Transcribe audio blob via backend Groq Whisper ───────────
   const transcribeAudio = useCallback(async (audioBlob, ext) => {
     setVoiceState('transcribing');
+    const abortCtrl = new AbortController();
+    sttAbortRef.current = abortCtrl;
     try {
       const formData = new FormData();
       formData.append('file', audioBlob, `recording${ext}`);
@@ -1834,18 +1878,27 @@ function InputArea({ inputValue, setInputValue, onSend, isTyping, inputRef, onIm
         method: 'POST',
         body: formData,
         headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+        signal: abortCtrl.signal,
       });
       const data = await res.json().catch(() => null);
-      console.log('[Voice] STT response:', data);
+      console.log('[Voice] STT response status:', res.status, data);
 
-      if (!data) {
-        alert('Voice server error. Make sure the backend is running.');
+      if (!res.ok) {
+        const errorMsg = data?.detail || data?.error || `Voice transcription failed (${res.status})`;
+        if (res.status === 429) {
+          alert('Another voice request is already in progress. Please wait a moment.');
+        } else if (res.status === 503) {
+          alert('Voice transcription is temporarily unavailable or at maximum capacity. Please retry shortly.');
+        } else if (res.status === 400) {
+          alert('Voice recording could not be processed: ' + errorMsg);
+        } else {
+          alert('Transcription error: ' + errorMsg);
+        }
         return;
       }
 
-      if (data.error) {
-        console.error('[Voice] Server error:', data.error);
-        alert('Transcription error: ' + data.error);
+      if (!data) {
+        alert('Voice server error. Make sure the backend is running.');
         return;
       }
 
@@ -1860,9 +1913,14 @@ function InputArea({ inputValue, setInputValue, onSend, isTyping, inputRef, onIm
         alert('No speech detected. Speak clearly for at least 2 seconds.');
       }
     } catch (err) {
+      if (err.name === 'AbortError') {
+        console.log('[Voice] STT request cancelled');
+        return;
+      }
       console.error('[Voice] Error:', err);
       alert('Voice failed: ' + err.message);
     } finally {
+      sttAbortRef.current = null;
       setVoiceState('idle');
     }
   }, [setInputValue]);
@@ -1882,6 +1940,13 @@ function InputArea({ inputValue, setInputValue, onSend, isTyping, inputRef, onIm
   // ── Start recording ──────────────────────────────────────────
   const startRecording = useCallback(async () => {
     console.log('[Voice] Starting recording...');
+    if (voiceState === 'transcribing') {
+      return;
+    }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      alert('Microphone access is not supported by your browser.');
+      return;
+    }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -1897,8 +1962,10 @@ function InputArea({ inputValue, setInputValue, onSend, isTyping, inputRef, onIm
 
       // Find best MIME type
       let mimeType = '';
-      for (const mt of ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4', '']) {
-        if (!mt || MediaRecorder.isTypeSupported(mt)) { mimeType = mt; break; }
+      if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported) {
+        for (const mt of ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4', '']) {
+          if (!mt || MediaRecorder.isTypeSupported(mt)) { mimeType = mt; break; }
+        }
       }
       console.log('[Voice] Using MIME:', mimeType || '(default)');
 
@@ -1930,7 +1997,7 @@ function InputArea({ inputValue, setInputValue, onSend, isTyping, inputRef, onIm
         const blob = new Blob(audioChunksRef.current, { type: mime });
         console.log('[Voice] Blob:', blob.size, 'bytes, type:', mime, 'duration:', duration + 's');
 
-        if (blob.size < 1000) {
+        if (blob.size < 500) {
           console.warn('[Voice] Blob too small, skipping');
           setVoiceState('idle');
           return;
@@ -1939,8 +2006,9 @@ function InputArea({ inputValue, setInputValue, onSend, isTyping, inputRef, onIm
         // Determine extension
         let ext = '.webm';
         if (mime.includes('ogg')) ext = '.ogg';
-        else if (mime.includes('mp4')) ext = '.mp4';
+        else if (mime.includes('mp4') || mime.includes('m4a')) ext = '.m4a';
         else if (mime.includes('mpeg') || mime.includes('mp3')) ext = '.mp3';
+        else if (mime.includes('wav')) ext = '.wav';
 
         await transcribeAudio(blob, ext);
       };
@@ -1976,7 +2044,7 @@ function InputArea({ inputValue, setInputValue, onSend, isTyping, inputRef, onIm
         alert('Microphone error: ' + err.message);
       }
     }
-  }, [transcribeAudio]);
+  }, [transcribeAudio, voiceState]);
 
   // ── Toggle handler ───────────────────────────────────────────
   const handleMicClick = useCallback(() => {
@@ -1985,8 +2053,14 @@ function InputArea({ inputValue, setInputValue, onSend, isTyping, inputRef, onIm
       stopRecording();
     } else if (voiceState === 'idle') {
       startRecording();
+    } else if (voiceState === 'transcribing') {
+      // User can cancel slow or stuck transcription
+      if (sttAbortRef.current) {
+        sttAbortRef.current.abort();
+        sttAbortRef.current = null;
+      }
+      setVoiceState('idle');
     }
-    // If transcribing, ignore click
   }, [voiceState, stopRecording, startRecording]);
 
   const formatTime = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
@@ -2043,12 +2117,12 @@ function InputArea({ inputValue, setInputValue, onSend, isTyping, inputRef, onIm
             className="nc-iside"
             title={
               voiceState === 'recording' ? 'Stop recording'
-                : voiceState === 'transcribing' ? 'Transcribing...'
+                : voiceState === 'transcribing' ? 'Transcribing... click to cancel'
                 : 'Voice input — click to speak'
             }
             onClick={handleMicClick}
-            disabled={voiceState === 'transcribing'}
             style={micStyle}
+
           >
             <i className={`fas ${micIcon}`} />
           </button>
@@ -2781,7 +2855,9 @@ export default function App() {
             isTyping={isTyping}
             inputRef={inputRef}
             onImageUpload={handleImageUpload}
+            currentSessionId={currentSessionId}
           />
+
         </main>
       </div>
 

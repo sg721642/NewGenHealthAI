@@ -71,3 +71,21 @@ INFERENCE_QUEUE_TIMEOUT_SECONDS: float = float(
 ALLOW_MODEL_DOWNLOADS: bool = os.getenv("ALLOW_MODEL_DOWNLOADS", "false").strip().lower() == "true"
 ENABLE_BLIP_CAPTIONING: bool = os.getenv("ENABLE_BLIP_CAPTIONING", "false").strip().lower() == "true"
 
+# ── Voice Processing & Concurrency Resource Protection (A07, A08) ─────────────
+# Configurable audio upload limit (default: 10 MB) and minimum speech payload (500 bytes)
+MAX_AUDIO_UPLOAD_BYTES: int = int(os.getenv("MAX_AUDIO_UPLOAD_BYTES", 10 * 1024 * 1024))
+MIN_AUDIO_UPLOAD_BYTES: int = int(os.getenv("MIN_AUDIO_UPLOAD_BYTES", 500))
+MAX_AUDIO_DURATION_SECONDS: float = float(os.getenv("MAX_AUDIO_DURATION_SECONDS", "300.0"))
+
+# Voice capacity management: process-local concurrency semaphores
+MAX_CONCURRENT_STT: int = int(os.getenv("MAX_CONCURRENT_STT", "3"))
+MAX_CONCURRENT_TTS: int = int(os.getenv("MAX_CONCURRENT_TTS", "5"))
+VOICE_QUEUE_TIMEOUT_SECONDS: float = float(os.getenv("VOICE_QUEUE_TIMEOUT_SECONDS", "5.0"))
+
+# Provider deadlines & timeouts
+STT_REQUEST_TIMEOUT_SECONDS: float = float(os.getenv("STT_REQUEST_TIMEOUT_SECONDS", "15.0"))
+STT_OVERALL_DEADLINE_SECONDS: float = float(os.getenv("STT_OVERALL_DEADLINE_SECONDS", "30.0"))
+TTS_REQUEST_TIMEOUT_SECONDS: float = float(os.getenv("TTS_REQUEST_TIMEOUT_SECONDS", "15.0"))
+MAX_TTS_INPUT_CHARS: int = int(os.getenv("MAX_TTS_INPUT_CHARS", "2000"))
+
+

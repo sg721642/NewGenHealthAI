@@ -1,6 +1,6 @@
 # NewGenHealthAI — Deployment Runbook
 
-> **Status**: Phase 2B.1 (Final Workflow Reliability, Privacy and Emergency-Safety Corrections).
+> **Status**: Phase 3B (Secure Voice Processing, Reliable STT/TTS and Resource Protection).
 > Runbook is authoritative for the Docker + Hugging Face Spaces deployment path.
 
 ## Architecture
@@ -17,12 +17,22 @@ GitHub (sg721642/NewGenHealthAI)
 
 | Variable | Required | Purpose |
 |---|---|---|
-| `GROQ_API_KEY` | Yes | LLM (Groq) and STT (Whisper) |
+| `GROQ_API_KEY` | Yes | LLM (Groq) and STT (Whisper via `AsyncGroq`) |
 | `TAVILY_API_KEY` | Optional | Tavily web search tool |
 | `SESSION_SECRET_KEY` / `SESSION_SECRET` | Yes | Starlette session cookie signing (must be at least 32 characters in production) |
 | `LEGACY_PBKDF2_SALT` | Optional (Migration) | Migration-only salt for legacy PBKDF2 password upgrades to Argon2id |
 | `SESSION_EXPIRE_HOURS` | Optional | Session token validity duration in hours (default: `24`) |
 | `CONSULTATION_TIMEOUT_SECONDS` | Optional | Overall per-consultation wall-clock timeout in seconds (default: `90`) |
+| `MAX_AUDIO_UPLOAD_BYTES` | Optional | Maximum audio file upload size in bytes (default: `10485760` / 10MB) |
+| `MIN_AUDIO_UPLOAD_BYTES` | Optional | Minimum audio file upload size in bytes (default: `500` B) |
+| `MAX_AUDIO_DURATION_SECONDS` | Optional | Maximum audio duration in seconds for WAV header check (default: `300.0` / 5 min) |
+| `MAX_CONCURRENT_STT` | Optional | Maximum concurrent speech-to-text transcriptions per worker (default: `3`) |
+| `MAX_CONCURRENT_TTS` | Optional | Maximum concurrent text-to-speech syntheses per worker (default: `5`) |
+| `VOICE_QUEUE_TIMEOUT_SECONDS` | Optional | Maximum queue wait for voice capacity permits before HTTP 503 (default: `5.0` s) |
+| `STT_REQUEST_TIMEOUT_SECONDS` | Optional | Per-attempt network timeout for Groq STT API (default: `15.0` s) |
+| `STT_OVERALL_DEADLINE_SECONDS` | Optional | Total timeout for STT transcription including fallbacks (default: `30.0` s) |
+| `TTS_REQUEST_TIMEOUT_SECONDS` | Optional | Per-request timeout for Edge TTS streaming (default: `15.0` s) |
+| `MAX_TTS_INPUT_CHARS` | Optional | Maximum allowed input characters for TTS synthesis (default: `2000`) |
 | `ALLOWED_ORIGINS` | Optional | Comma-separated list of allowed CORS origins (default: localhost & 127.0.0.1 ports 5173/8000) |
 | `TRUSTED_PROXIES` | Optional | Comma-separated list of trusted reverse proxy IPs and CIDR networks (default: `127.0.0.1,::1`). Set to include reverse proxy CIDRs (e.g. `10.0.0.0/8,172.16.0.0/12`) on Hugging Face Spaces or cloud proxies. |
 | `CHAT_DB_PATH` | Optional | Override SQLite path (default: `backend/storage/chat_db/susham_health.db`) |
@@ -203,6 +213,60 @@ npm --prefix frontend run dev
 
 ---
 
+## Voice Processing & Resource Protection Architecture (Phase 3B — A07, A08)
+
+### 1. Chunked Audio Streaming & Upload Validation (A07)
+- **Streaming Ingestion**: Uploads to `/api/v1/voice/stt` are read in 64KB chunks up to `MAX_AUDIO_UPLOAD_BYTES` (default: 10MB). Payloads exceeding the limit immediately abort with `HTTP 400 Bad Request` prior to accumulating in memory or writing to disk.
+- **Minimum Size Threshold**: Files smaller than `MIN_AUDIO_UPLOAD_BYTES` (default: 500 bytes) are rejected with `HTTP 400 Bad Request` to prevent meaningless empty/corrupted upstream provider calls.
+- **Audio Container Magic Bytes**: Signatures are checked at byte 0:
+  - WAV: `RIFF....WAVE`
+  - WebM: `\x1a\x45\xdf\xa3` (EBML header)
+  - OGG: `OggS`
+  - MP3: `ID3` or MPEG frame sync `\xff\xfb` / `\xff\xf3` / `\xff\xf2`
+  - M4A: `....ftyp`
+  - FLAC: `fLaC`
+  Non-audio files, forged MIME types, or unsupported containers fail closed with `HTTP 400 Bad Request`.
+- **WAV Duration Probe**: For WAV files, `probe_wav_duration_seconds` inspects the `fmt ` and `data` chunks to compute duration, rejecting audio exceeding `MAX_AUDIO_DURATION_SECONDS` (default: 300s / 5 minutes) with `HTTP 400 Bad Request`.
+
+### 2. Private Temporary File Security (A07)
+- **Restricted Directory**: Audio files for transcription are written to private directories created via `tempfile.mkdtemp(prefix="ngh_voice_")` with mode `0o700`.
+- **Restricted File Mode**: The audio file itself is opened with `O_CREAT | O_WRONLY` and mode `0o600` (read/write by owner process only).
+- **Guaranteed Cleanup**: Deterministic removal in `finally:` blocks via `cleanup_temp_audio` ensures zero lingering temporary files and prevents file descriptor leaks. Absolute paths are never leaked to the client or written to server logs.
+
+### 3. Non-Blocking AsyncGroq & Fallback Progression (A07)
+- **Native Async Client**: Replaced blocking synchronous `Groq` calls with non-blocking `AsyncGroq(timeout=STT_REQUEST_TIMEOUT_SECONDS)` (default: 15s).
+- **Overall Request Deadline**: `asyncio.wait_for(..., timeout=STT_OVERALL_DEADLINE_SECONDS)` (default: 30s) strictly bounds total STT turnaround including fallback attempts.
+- **Bounded Fallback Progression**:
+  1. Primary: `whisper-large-v3-turbo`
+  2. Fallback: `whisper-large-v3` (attempted only on transient errors: HTTP 429, 500, 502, 503, 504, or network timeout).
+- **Fail-Fast on Client Errors**: HTTP 400 (Bad Request) or HTTP 401 (Unauthorized) from upstream immediately fails without retrying or attempting fallback.
+- **Zero Synthetic Transcripts**: If all models fail or time out, the endpoint returns `HTTP 503 Service Unavailable` or `HTTP 504 Gateway Timeout`. Synthetic transcripts or simulated medical text are strictly never generated.
+
+### 4. Process-Local Voice Capacity Management (A07)
+- **Dual Semaphores**: Process-local `VoiceCapacityManager` maintains separate bounded semaphores for STT (`MAX_CONCURRENT_STT=3`) and TTS (`MAX_CONCURRENT_TTS=5`).
+- **Wait Queue Timeout**: Requests waiting longer than `VOICE_QUEUE_TIMEOUT_SECONDS` (default: 5.0s) fail gracefully with `HTTP 503 Service Unavailable`.
+- **Per-User Limits**: An authenticated user is limited to 1 active STT and 1 active TTS operation simultaneously. Secondary concurrent requests return `HTTP 429 Too Many Requests`.
+- **Guaranteed Permit Release**: Asynchronous context managers (`VoicePermit`) release semaphore slots and clear user tracking in `finally:` blocks across normal completion, upstream errors, client disconnections, or request cancellations.
+
+### 5. Hardened TTS Synthesis & Streaming (A08)
+- **Authenticated POST Body**: Spoken text is submitted via `POST /api/v1/voice/tts` in JSON body (`TTSRequest`), eliminating URL logging of sensitive clinical content.
+- **Input Boundaries & Markdown Stripping**: Enforces text length (`2` to `MAX_TTS_INPUT_CHARS=2000` chars) and strips markdown syntax (bold, italic, code blocks, URLs) to produce clean natural spoken audio.
+- **Multilingual Neural Voice Allowlist**: Supported languages map to allowlisted Edge TTS neural voices:
+  - English: `en-US-AriaNeural`, `en-US-GuyNeural`, `en-US-JennyNeural`, `en-GB-SoniaNeural`
+  - Hindi: `hi-IN-SwaraNeural`, `hi-IN-MadhurNeural`
+  Unrecognized voice IDs are rejected with `HTTP 400 Bad Request`.
+- **Anti-Caching Headers**: Responses set `Cache-Control: no-store, no-cache, must-revalidate, private` and `Pragma: no-cache` to prevent client or proxy caching of spoken audio.
+- **Client Disconnect Handling**: Streaming generator guarantees capacity permit release in `finally:` even if the browser cancels or drops the HTTP connection mid-stream.
+
+### 6. Sensitive Voice Logging Redaction & Third-Party Privacy Disclosures (A08)
+- **Sensitive Redaction**: Server logs record audio byte counts, processed character counts, language codes, and exception class names (`type(e).__name__`) only. Upload filenames, raw transcripts, spoken text, audio payloads, and raw exception messages are strictly redacted.
+- **Third-Party Data Flow Disclosure**:
+  - STT: Audio is transmitted over TLS to Groq's cloud infrastructure for Whisper inference.
+  - TTS: Spoken text is transmitted over TLS to Microsoft Edge TTS neural synthesis services.
+  - In accordance with medical privacy standards, audio files and spoken text are not permanently retained on disk by NewGenHealthAI.
+
+---
+
 ## Pre-deployment Verification Gates
 
 - [x] Auth isolation: cross-user session access blocked (A01/A02 verified with 35 backend tests)
@@ -239,8 +303,15 @@ npm --prefix frontend run dev
 - [x] Automatic remote model downloads blocked when `ALLOW_MODEL_DOWNLOADS=false` (A09 / Phase 3A)
 - [x] Top-level BLIP downloads eliminated; safe non-medical caption fallback verified (A09 / Phase 3A)
 - [x] Operational diagnostics sanitized of server paths and internal state (A09 / Phase 3A)
-- [x] Complete backend test suite inventory verified (256 passed, 0 skipped, 0 failed)
-- [x] Frontend build clean with lint passing (0 errors, 0 warnings, 11/11 tests pass)
+- [x] Audio chunked upload (64KB), byte bounds (500B..10MB), container magic byte check, WAV duration probe (A07 / Phase 3B)
+- [x] Private temporary audio files created with 0o700/0o600 and deterministic cleanup in finally: (A07 / Phase 3B)
+- [x] Non-blocking AsyncGroq with overall deadline (30s) and bounded fallback (turbo -> v3) (A07 / Phase 3B)
+- [x] Process-local voice capacity manager (STT=3, TTS=5, timeout 5s, per-user limit 1) (A07 / Phase 3B)
+- [x] Hardened TTS synthesis (POST, 2..2000 chars, markdown stripping, voice allowlists, anti-caching headers, disconnect cleanup) (A08 / Phase 3B)
+- [x] Voice log redaction (filenames, transcripts, spoken text, audio payloads, exception details redacted) (A08 / Phase 3B)
+- [x] Frontend voice lifecycle (AbortController for STT/TTS, mic track release, permission denial handling) (Phase 3B)
+- [x] Complete backend test suite inventory verified (285 passed, 0 skipped, 0 failed)
+- [x] Frontend build clean with lint passing (0 errors, 0 warnings, 13/13 tests pass)
 - [ ] HF Space running status verified with live credentials (post-deployment)
 
 

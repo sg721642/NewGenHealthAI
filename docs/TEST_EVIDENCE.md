@@ -1,6 +1,6 @@
 # NewGenHealthAI — Test Evidence & Verification Records
 
-Last updated: Phase 2B.1 (Final Workflow Reliability, Privacy and Emergency-Safety Corrections)
+Last updated: Phase 3B (Secure Voice Processing, Reliable STT/TTS and Resource Protection)
 
 ## Phase 1B Test Execution Summary
 
@@ -694,4 +694,106 @@ Phase 3A Regression Matrix Coverage (`test_phase3a_image_security.py`):
 - **Vitest Integration Tests**: 11 / 11 passed (100%)
 - **ESLint Linter**: 0 errors, 0 warnings
 - **Production Build (Vite)**: Clean bundle generated (`index-DkjXr3wK.js`, `index-CB66vf3N.css`)
+
+---
+
+## Phase 3B Verification Results (Secure Voice Processing, Reliable STT/TTS and Resource Protection)
+
+Executed at: Phase 3B Complete
+Branch: `fix/healthai-audit-premium-ui`
+
+### 1. Full Backend Test Suite
+
+Command:
+```bash
+/tmp/nghai_venv/bin/pytest backend/tests/ -v
+```
+
+Outcome:
+- **Total Tests**: 285
+- **Passed**: 285 (100%)
+- **Skipped**: 0
+- **Failed**: 0
+- **Duration**: 4.88s
+- **Exit Code**: 0
+
+Test Inventory by Module (20 modules):
+| Test Module | Total Tests | Passed | Skipped | Failed | Status |
+|---|---|---|---|---|---|
+| `test_agents.py` | 8 | 8 | 0 | 0 | Passed |
+| `test_api.py` | 13 | 13 | 0 | 0 | Passed |
+| `test_api_edge_cases.py` | 5 | 5 | 0 | 0 | Passed |
+| `test_app.py` | 1 | 1 | 0 | 0 | Passed |
+| `test_auth_hardening.py` | 14 | 14 | 0 | 0 | Passed |
+| `test_coverage_gaps.py` | 9 | 9 | 0 | 0 | Passed |
+| `test_database.py` | 3 | 3 | 0 | 0 | Passed |
+| `test_logging.py` | 4 | 4 | 0 | 0 | Passed |
+| `test_phase1c1_hardening.py` | 13 | 13 | 0 | 0 | Passed |
+| `test_phase1d_concurrency.py` | 15 | 15 | 0 | 0 | Passed |
+| `test_phase2a_image_classifier.py` | 36 | 36 | 0 | 0 | Passed |
+| `test_phase2b_workflow_safety.py` | 23 | 23 | 0 | 0 | Passed |
+| `test_phase2b1_corrections.py` | 28 | 28 | 0 | 0 | Passed |
+| `test_phase3a_image_security.py` | 27 | 27 | 0 | 0 | Passed |
+| `test_phase3b_voice_security.py` | 29 | 29 | 0 | 0 | Passed |
+| `test_security_ownership.py` | 12 | 12 | 0 | 0 | Passed |
+| `test_services.py` | 11 | 11 | 0 | 0 | Passed |
+| `test_tools.py` | 12 | 12 | 0 | 0 | Passed |
+| `test_workflow.py` | 1 | 1 | 0 | 0 | Passed |
+| `test_workflow_routing.py` | 7 | 7 | 0 | 0 | Passed |
+| **Total Suite** | **285** | **285** | **0** | **0** | **Passed (100%)** |
+
+Phase 3B Regression Matrix Coverage (`test_phase3b_voice_security.py`):
+| Matrix Scenario | Scenario Description & Security Guarantee | Test Function | Outcome |
+|---|---|---|---|
+| **STT Auth Enforcement** | `/voice/stt` requires valid Bearer token authentication; unauthenticated request returns HTTP 401 | `test_unauthenticated_voice_stt_returns_401` | ✅ Pass |
+| **TTS Auth Enforcement** | `/voice/tts` requires valid Bearer token authentication; unauthenticated request returns HTTP 401 | `test_unauthenticated_voice_tts_returns_401` | ✅ Pass |
+| **TTS Query Auth Rejection** | Passing token via URL query parameter (`?token=...`) fails closed with HTTP 401 | `test_tts_query_string_auth_rejected` | ✅ Pass |
+| **Empty Audio Upload** | Zero-byte audio file upload rejected with HTTP 400 | `test_empty_audio_upload_rejected` | ✅ Pass |
+| **Tiny Audio Upload** | Upload smaller than `MIN_AUDIO_UPLOAD_BYTES` (500B) rejected with HTTP 400 before decoding | `test_tiny_audio_upload_rejected` | ✅ Pass |
+| **Oversized Audio Upload** | Upload exceeding `MAX_AUDIO_UPLOAD_BYTES` (10MB) aborted via chunked reader with HTTP 400 | `test_oversized_audio_upload_rejected` | ✅ Pass |
+| **Forged MIME Type** | Non-audio file with forged `audio/wav` MIME header rejected via magic byte check | `test_forged_mime_audio_rejected` | ✅ Pass |
+| **Unsupported Container** | Containers outside allowlist (e.g. MIDI) rejected with HTTP 400 | `test_unsupported_audio_container_rejected` | ✅ Pass |
+| **Valid Containers: WAV** | Standard browser WAV container (`RIFF....WAVE`) accepted | `test_valid_browser_containers_detected[wav]` | ✅ Pass |
+| **Valid Containers: WebM** | Standard browser WebM container (`\x1a\x45\xdf\xa3`) accepted | `test_valid_browser_containers_detected[webm]` | ✅ Pass |
+| **Valid Containers: OGG** | Browser OGG Opus container (`OggS`) accepted | `test_valid_browser_containers_detected[ogg]` | ✅ Pass |
+| **Valid Containers: MP3** | Standard MP3 sync frames (`0xFF\xFB` / ID3) accepted | `test_valid_browser_containers_detected[mp3]` | ✅ Pass |
+| **Valid Containers: M4A** | Browser AAC/M4A container (`ftyp`) accepted | `test_valid_browser_containers_detected[m4a]` | ✅ Pass |
+| **Valid Containers: FLAC** | Lossless FLAC container (`fLaC`) accepted | `test_valid_browser_containers_detected[flac]` | ✅ Pass |
+| **WAV Duration Probe** | WAV files with duration exceeding `MAX_AUDIO_DURATION_SECONDS` (300s) rejected with HTTP 400 | `test_wav_duration_limit_enforced` | ✅ Pass |
+| **Private Tempfile Lifecycle** | Temporary directory created with `0o700` and file with `0o600`; cleaned up deterministically in `finally:` without leaking path | `test_secure_temp_file_creation_and_cleanup` | ✅ Pass |
+| **Unconfigured Groq 503** | Missing `GROQ_API_KEY` returns HTTP 503 without crashing | `test_stt_unconfigured_groq_api_key_returns_503` | ✅ Pass |
+| **Transient Error Fallback** | Transient error on `whisper-large-v3-turbo` triggers fallback to `whisper-large-v3` | `test_stt_fallback_model_tried_on_transient_error` | ✅ Pass |
+| **Permanent Error Fast Fail** | Client error (HTTP 400/401) fails immediately without retrying or fallback | `test_stt_permanent_error_fails_fast_without_fallback` | ✅ Pass |
+| **All Models Failed 503** | When all fallback models fail, endpoint returns HTTP 503 without generating fake transcript | `test_stt_all_models_failed_returns_503` | ✅ Pass |
+| **Per-User STT Limit** | Active user with concurrent in-flight STT request receives HTTP 429 | `test_voice_capacity_per_user_stt_limit_returns_429` | ✅ Pass |
+| **Global STT Semaphore 503** | Global STT capacity exhausted (`MAX_CONCURRENT_STT=3`) returns HTTP 503 | `test_voice_capacity_global_stt_semaphore_returns_503` | ✅ Pass |
+| **Per-User TTS Limit** | Active user with concurrent in-flight TTS request receives HTTP 429 | `test_voice_capacity_per_user_tts_limit_returns_429` | ✅ Pass |
+| **TTS Authenticated POST** | Valid POST `/voice/tts` request streams MP3 audio cleanly | `test_tts_valid_authenticated_post_streams_audio` | ✅ Pass |
+| **TTS Boundary Validation** | Empty or too short text (<2 chars) returns HTTP 400 Bad Request | `test_tts_empty_or_too_short_text_returns_400` | ✅ Pass |
+| **TTS Multilingual Support** | English and Hindi text correctly route to respective neural voices | `test_tts_unicode_hindi_and_english_supported` | ✅ Pass |
+| **TTS Provider Failure 500** | Upstream edge-tts synthesis failure returns sanitized HTTP 500 without leaking stack traces | `test_tts_provider_failure_returns_500` | ✅ Pass |
+| **Voice Log Redaction** | Logs record character/byte counts only; never leak spoken text, transcripts, audio bytes, or exception traces | `test_sensitive_transcripts_and_text_not_logged` | ✅ Pass |
+| **Model Import Clarification** | Confirms lazy model loading applies to `.pth` weights while framework imports occur on module import | `test_lightweight_import_smoke_test_disease_classifier_clarification` | ✅ Pass |
+
+### 2. Frontend Verification
+
+Command:
+```bash
+npm --prefix frontend test -- --run
+```
+
+Outcome:
+- **Total Tests**: 13
+- **Passed**: 13 (100%)
+- **Failed**: 0
+- **Duration**: 410ms
+- **Exit Code**: 0
+
+New Frontend Tests Added in Phase 3B:
+- `handles microphone permission denial gracefully`: Verifies `NotAllowedError` UI alert and state reset.
+- `handles unsupported browser audio recording environment gracefully`: Verifies missing `mediaDevices` or `MediaRecorder` error message without crashing.
+
+Linter & Production Build:
+- **ESLint**: 0 errors, 0 warnings (`npm --prefix frontend run lint`)
+- **Vite Build**: Clean production bundle output to `backend/app/static/assets/index-wdGNyF6d.js` (398.45 kB) and `index-CB66vf3N.css` (18.46 kB).
 
