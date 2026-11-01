@@ -15,6 +15,7 @@
 | Phase 1C.1 commit | `d4bc0c14a699b3a37fae0b38839b7ba944503d04` |
 | Phase 1D commit | `256c86d649d0dd67c916892664d7f41d7919fabc` |
 | Phase 2A commit | `b67abedd2a69b141e450372099c186ca73e48bd6` |
+| Phase 2B commit | `0995690914b44fe496c2277c1e56181fac82a52c` |
 
 | Current phase | Phase 2B — Bounded Clinical Workflow and Medical-Response Safety |
 
