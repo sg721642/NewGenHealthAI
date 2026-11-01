@@ -468,6 +468,8 @@ pip install -r backend/requirements.txt
 
 #### Step C: Local Execution Modes & Exact URLs
 1. **Full-Stack Development Mode (Interactive Presentation Default)**:
+   > [!NOTE]
+   > `run.py` is specifically a **Local Development Launcher** that boots the FastAPI backend (`uvicorn ... --reload` on port 8000) and Vite frontend development server (`npm run dev` on port 5173) as concurrent subprocesses with hot-reloading. It is NOT a production launcher. For production-style execution and Hugging Face Spaces, use the multi-stage root `Dockerfile`.
    ```bash
    export SESSION_SECRET_KEY="presentation_demo_secret_key_minimum_32_characters"
    export ALLOW_MODEL_DOWNLOADS="false"
@@ -487,7 +489,9 @@ pip install -r backend/requirements.txt
    ```
    - **Integrated Application**: `http://localhost:8000`
 
-3. **Integrated Container Mode (Docker)**:
+3. **Integrated Container Mode (Production-Style Root Dockerfile)**:
+   > [!IMPORTANT]
+   > The root [`Dockerfile`](file:///Users/satyamgupta/Documents/NewGenHealthAI/Dockerfile) is the authoritative production-style container definition for local container testing and Hugging Face Spaces. It compiles the standalone frontend in Stage 1 and serves it alongside the FastAPI backend in Stage 2 under non-root UID 1000 on port 7860.
    ```bash
    docker run -p 7860:7860 \
      -e SESSION_SECRET_KEY="presentation_demo_secret_key_minimum_32_characters" \
@@ -569,20 +573,32 @@ If a database file were retained or mounted:
 - **Schema v2**: Automatically converts `user_sessions` to SHA-256 token hashing (`token_hash`) and sets session expiration. Legacy PBKDF2 passwords are automatically verified and upgraded to Argon2id on first user login via optimistic concurrency.
 - **Pre-migration Safety**: Step-wise atomic transactions with SQLite Online Backup (`src.backup(dst)`) and `PRAGMA integrity_check` validation.
 
-### 5. Reversible Deployment & Rollback Runbook (When Authorized)
+### 5. Reversible Deployment & Non-Destructive Rollback Runbook (When Authorized)
 When the maintainer explicitly approves deployment:
 ```bash
 # 1. Add Hugging Face remote (if not already added)
 git remote add huggingface https://huggingface.co/spaces/sg721642/NewGenHealthAI
 
-# 2. Push verified release candidate to Hugging Face main branch
+# 2. Push verified release candidate to Hugging Face main branch (Fast-forward)
 git push huggingface fix/healthai-audit-premium-ui:main
 
 # 3. Monitor container build in Hugging Face web interface
-# Downtime risk: 3 to 5 minutes while the multi-stage Docker image builds on Hugging Face runners.
+# Downtime expectation: 3 to 5 minutes while the multi-stage Docker image builds on Hugging Face runners.
 
-# 4. Immediate Rollback Procedure (in case of unexpected regression)
-git push -f huggingface dadb57ad4088a280c2aab9b3781ff42a4a30df25:main
+# 4. Non-Destructive Git Rollback (Recommended):
+# Revert deployment cleanly by resetting worktree to baseline dadb57ad4088a280c2aab9b3781ff42a4a30df25
+# and committing a forward revert commit. This preserves complete Git history without rewriting history:
+git checkout fix/healthai-audit-premium-ui
+git read-tree -u --reset dadb57ad4088a280c2aab9b3781ff42a4a30df25
+git commit -m "revert: non-destructive rollback to production baseline dadb57ad4088a280c2aab9b3781ff42a4a30df25"
+git push huggingface fix/healthai-audit-premium-ui:main
+
+# 5. Verified Data Restoration (When persistent storage is attached):
+# If a persistent volume is attached and backup was created prior to deployment:
+# python -c "from app.db.migrations import restore_database; restore_database('/data/backups/susham_health.db.backup_pre_deploy', '/data/chat_db/susham_health.db')"
+
+# 6. Emergency Hard-Reset Fallback (Only if forward git pushes are rejected):
+# git push -f huggingface dadb57ad4088a280c2aab9b3781ff42a4a30df25:main
 ```
 
 ### 6. Deployment Authorization Status

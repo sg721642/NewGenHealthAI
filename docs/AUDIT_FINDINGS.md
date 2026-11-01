@@ -122,8 +122,7 @@ Phase 1D implemented generational versioning (`_versions`) and deletion tombston
 ### 6. Production Space Baseline & Ephemeral Storage Risk Analysis
 - Recorded authoritative production baseline commit `dadb57ad4088a280c2aab9b3781ff42a4a30df25` on `https://huggingface.co/spaces/sg721642/NewGenHealthAI`.
 - Analyzed container lifecycle risks on Hugging Face Spaces: without a mounted persistent volume, any container rebuild permanently deletes the ephemeral SQLite database (`/app/backend/storage/chat_db/susham_health.db`).
-- Documented that public persistent-user deployment must be marked BLOCKED until persistent block storage or an external relational database (e.g., PostgreSQL) is attached.
-- Authored step-by-step reversible deployment procedure with atomic rollback command (`git push -f huggingface dadb57ad4088a280c2aab9b3781ff42a4a30df25:main`).
+- Authored step-by-step reversible deployment procedure prioritizing non-destructive Git-based rollback (`git read-tree -u --reset dadb57ad...` with forward commit) and verified point-in-time data restoration, retaining force-push strictly as an emergency fallback.
 - Reconfirmed that zero pushes to external spaces were performed under the strict ₹0 budget constraint.
 
 ## A16 Preservation Notes
