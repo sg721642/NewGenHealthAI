@@ -78,6 +78,22 @@ Phase 1D implemented generational versioning (`_versions`) and deletion tombston
 - Created `backend/tests/test_phase6_multiuser_e2e.py` (8 automated tests).
 - Verified User A vs User B consultation isolation, cross-account access denial, 404 fail-closed behavior, immediate token revocation on logout, and concurrent multi-user execution.
 
+## Section 13 Phase 7A Container Verification, Storage Persistence & Full-Stack Acceptance
+
+### 1. Deterministic Container Dependencies & Strict Reproducibility
+- Resolved `torchvision` unpinned gap by pinning `torchvision==0.24.1` canonically alongside `torch==2.9.1` across `backend/pyproject.toml`, `backend/requirements.txt`, and `requirements.txt`.
+- Eliminated non-deterministic `|| npm install` fallback in `Dockerfile` and `frontend/Dockerfile`, enforcing strict `npm ci`.
+- Added missing runtime media and graphics packages (`ffmpeg`, `libgl1`, `libglib2.0-0`) to Stage 2 Python runtime in Dockerfile.
+- Created `.github/workflows/docker-ci.yml` to build, run, and test the unified container with non-root UID 1000 in an automated Ubuntu runner.
+
+### 2. Full-Stack Browser QA vs Mock Visual QA Boundary
+- **Mock Visual QA (`frontend/scripts/browser_qa.cjs`)**: Retained as a fast, client-side CSS/DOM layout test running against lightweight node mock endpoints across 5 viewports (9 screenshots).
+- **Real Full-Stack Acceptance QA (`frontend/scripts/fullstack_browser_qa.cjs`)**: Spawns real FastAPI backend with an isolated SQLite DB (`/tmp/test_fullstack_phase7a.db`) and unified built React frontend. Exercises authentic registration, login token generation, message dispatch, real SQLite DB query, session switching with SQLite rehydration, conversation clearing, logout token revocation (401), cross-account denial (404), and unconfigured STT/vision graceful 503 degradation across 5 viewports (5 screenshots).
+
+### 3. Database Persistence & Ephemeral Storage Boundary
+- `backend/tests/test_phase7a_persistence.py` confirmed 100% data survival across complete database engine termination and reconnection.
+- Verified and documented that containers without a mounted persistent volume (e.g. Hugging Face Spaces `/data` volume) will lose state upon container recreation/restart.
+
 ## A16 Preservation Notes
 
 The following legacy identifiers were intentionally preserved for database compatibility:

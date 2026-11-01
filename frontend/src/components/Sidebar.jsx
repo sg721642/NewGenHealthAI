@@ -3,6 +3,7 @@ import { formatTimeAgo } from '../utils/formatters';
 
 export default function Sidebar({
   sidebarOpen,
+  isOpen,
   sessions,
   currentSessionId,
   onNewChat,
@@ -13,6 +14,7 @@ export default function Sidebar({
   user,
   onLogout,
 }) {
+  const isExpanded = sidebarOpen !== undefined ? sidebarOpen : (isOpen !== undefined ? isOpen : true);
   const [searchQuery, setSearchQuery] = useState('');
 
   const filteredSessions = useMemo(() => {
@@ -26,7 +28,7 @@ export default function Sidebar({
 
   return (
     <aside
-      className={`app-sidebar ${sidebarOpen ? 'open' : 'collapsed'}`}
+      className={`app-sidebar ${isExpanded ? 'open' : 'collapsed'}`}
       aria-label="Consultation History and Controls"
     >
       {/* Brand Header */}

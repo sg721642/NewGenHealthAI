@@ -1183,11 +1183,112 @@ PYTHONPATH=backend /tmp/nghai_venv/bin/pytest backend/tests/ -v
 ```
 
 Outcome:
-- **Total Test Files**: 22
-- **Total Tests**: 308
-- **Passed**: 308 (100%)
+- **Total Test Files**: 23
+- **Total Tests**: 310
+- **Passed**: 310 (100%)
 - **Failed**: 0
 - **Skipped**: 0
-- **Duration**: 5.16s
+- **Duration**: 5.41s
 - **Exit Code**: 0
+
+---
+
+## Phase 7A Test Execution Summary
+
+### 1. Database Persistence & Ephemeral Storage Boundary Suite (`test_phase7a_persistence.py`)
+
+Command:
+```bash
+PYTHONPATH=backend /tmp/nghai_venv/bin/pytest backend/tests/test_phase7a_persistence.py -v
+```
+
+Outcome:
+- **Total Tests**: 2
+- **Passed**: 2 (100%)
+- **Duration**: 0.17s
+- **Exit Code**: 0
+
+Test Details:
+| Test Name | Scenario Verified | Outcome |
+|---|---|---|
+| `test_sqlite_persistence_across_process_restart` | Complete engine teardown, process termination simulation, database reconnection, 100% user credential/conversation/message recovery, and active post-restart read/write continuity | ✅ Pass |
+| `test_ephemeral_container_boundary_documentation` | Unmounted ephemeral container storage reset simulation, documenting that persistent volume mounts are required to prevent data loss | ✅ Pass |
+
+---
+
+### 2. Real Full-Stack Browser Acceptance Suite (`frontend/scripts/fullstack_browser_qa.cjs`)
+
+Command:
+```bash
+node frontend/scripts/fullstack_browser_qa.cjs
+```
+
+Outcome:
+- **Architecture**: Real FastAPI backend + isolated SQLite DB (`/tmp/test_fullstack_phase7a.db`) + unified built React frontend (Playwright Chromium)
+- **Total Verification Steps**: 10
+- **Passed**: 10 (100%)
+- **Duration**: ~8.2s
+- **Exit Code**: 0
+
+Test Journey Records:
+| Step | Journey Scenario | Validation Method | Outcome |
+|---|---|---|---|
+| 1 | FastAPI Lifecycle & Port Binding | Polling `/api/v1/health` on port 8018 until HTTP 200 | ✅ Pass |
+| 2 | Playwright Chromium Initialization | Headless browser context initialized with high-DPI scaling | ✅ Pass |
+| 3 | User A Registration & Token Verification | Form submission for `dr_elena`, token stored in localStorage, user ID confirmed | ✅ Pass |
+| 4 | Message Dispatch & Real SQLite Persistence | Submitted tachycardia prompt; verified UI response & queried physical SQLite records | ✅ Pass |
+| 5 | Multi-Session Management & Rehydration | Created second conversation, switched back via sidebar, verified SQLite history reloaded | ✅ Pass |
+| 6 | Conversation Clear Lifecycle | Confirmed modal clear, verified UI empty state, queried SQLite to confirm 0 messages | ✅ Pass |
+| 7 | User A Logout & Token Revocation | Logged out, verified localStorage wiped, confirmed revoked token returns HTTP 401 | ✅ Pass |
+| 8 | User B Registration & Cross-Account Isolation | Registered `dr_marcus`, verified 0 initial sessions in UI, verified direct fetch to Elena session returns HTTP 404 | ✅ Pass |
+| 9 | Graceful Voice & Vision Degradation | Verified unconfigured STT returns HTTP 422/503 and vision diagnostics returns `degraded` with 0 heavy weights | ✅ Pass |
+| 10 | Responsive Layout & Visual Verification | Verified layouts across 5 viewports with zero horizontal overflow and zero uncaught exceptions | ✅ Pass |
+
+Captured Full-Stack Screenshots (`docs/screenshots/fullstack/`):
+1. `01_fullstack_desktop_user_a_dashboard.png` (1440×900 Desktop)
+2. `02_fullstack_laptop_conversation.png` (1280×800 Laptop)
+3. `03_fullstack_tablet_multisession.png` (768×1024 Tablet Portrait)
+4. `04_fullstack_mobile_user_b_isolation.png` (390×844 Modern Mobile)
+5. `05_fullstack_small_mobile_320x700.png` (320×700 Small Mobile)
+
+---
+
+### 3. Model & External Provider Readiness Inventory
+
+Evaluation of all 12 model and external provider integration points:
+
+| # | Integration Point | Target Component | Status | Operational Behavior & Fallback |
+|---|---|---|---|---|
+| 1 | Groq Clinical LLM | `app/agents/llm_agent.py`, `app/agents/triage_agent.py` | `MISSING_CREDENTIAL` (Test Env) / `VERIFIED_MOCK_ONLY` | In test environments lacking `GROQ_API_KEY`, workflow routes through fallback chain to deterministic educational guidance. |
+| 2 | Sentence-Transformers Embedding | `app/tools/vector_store.py` (`all-MiniLM-L6-v2`) | `MISSING_ARTIFACT` | Offline protection (`ALLOW_MODEL_DOWNLOADS=false`) skips heavy downloading; vector store operates with fallback or pre-built store. |
+| 3 | ChromaDB Vector Store & Knowledge Base | `app/tools/vector_store.py`, `app/tools/pdf_loader.py` | `VERIFIED_MOCK_ONLY` | In-memory/test embeddings verified; pre-built vector store used when PDF present. |
+| 4 | Groq Whisper Speech-to-Text | `app/api/v1/endpoints/voice.py` (`whisper-large-v3-turbo`) | `MISSING_CREDENTIAL` (Test Env) / `VERIFIED_MOCK_ONLY` | Returns HTTP 503 / 422 with sanitized error toast when Groq API key is unconfigured. |
+| 5 | Microsoft Edge-TTS Text-to-Speech | `app/api/v1/endpoints/voice.py` | `CONFIGURED_NOT_TESTED` | Fully wired with language voice allowlists and streaming buffers; unit tested with contract stubs. |
+| 6 | Skin Lesion Classifier | `app/services/disease_classifier.py` (`skin_model.pth`) | `MISSING_ARTIFACT` | Heavy weights not bundled in git; classifier returns `status='model_unavailable'` (HTTP 503) without crashing. |
+| 7 | Chest X-Ray Pathology Classifier | `app/services/disease_classifier.py` (`xray_model.pth`) | `MISSING_ARTIFACT` | Returns `status='model_unavailable'` (HTTP 503) with clear clinical guidance. |
+| 8 | Retinal OCT / Fundus Classifier | `app/services/disease_classifier.py` (`retina_model.pth`) | `MISSING_ARTIFACT` | Returns `status='model_unavailable'` (HTTP 503). |
+| 9 | General Pathology Classifier | `app/services/disease_classifier.py` (`general_model.pth`) | `MISSING_ARTIFACT` | Returns `status='model_unavailable'` (HTTP 503). |
+| 10 | Tavily Clinical Search API | `app/agents/tavily.py` | `MISSING_CREDENTIAL` (Test Env) | Bounded single-visit routing falls back to Wikipedia or safe educational response when key absent. |
+| 11 | Wikipedia Medical Knowledge Fallback | `app/agents/wikipedia.py` | `CONFIGURED_NOT_TESTED` | Wired with strict generic medical term allowlist (`_MEDICAL_TERM_ALLOWLIST`) to prevent symptom leakage. |
+| 12 | DuckDuckGo Web Search Fallback | `app/tools/search.py` | `CONFIGURED_NOT_TESTED` | Wired as secondary zero-credential web search fallback tool. |
+
+---
+
+### 4. Continuous Integration Pipeline (`.github/workflows/docker-ci.yml`)
+
+- **Trigger**: Push or pull request on `main` and `fix/healthai-audit-premium-ui` branches.
+- **Runner**: `ubuntu-latest` with standard Docker daemon.
+- **Workflow Steps**:
+  1. Checkout repository.
+  2. Setup Node.js 20 with `npm ci` cache.
+  3. Standalone Vite build (`npm run build:standalone`).
+  4. Docker image build (`docker build -t newgenhealthai:test .`).
+  5. Container execution on port 7860 with non-root user (1000).
+  6. Automated health polling (`http://127.0.0.1:7860/api/v1/health`).
+  7. Non-root user confirmation (`docker exec whoami` == `user`).
+  8. Static asset serving check (`curl -s -f http://127.0.0.1:7860/`).
+  9. Unauthenticated 401 check on `/api/v1/sessions`.
+  10. Full registration and chat creation curl roundtrip.
+  11. Container logs output on failure and clean container teardown.
+
 

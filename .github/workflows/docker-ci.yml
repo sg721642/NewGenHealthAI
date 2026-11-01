@@ -1,0 +1,123 @@
+name: Container Build & Full-Stack Acceptance CI
+
+on:
+  push:
+    branches:
+      - fix/healthai-audit-premium-ui
+  pull_request:
+    branches:
+      - fix/healthai-audit-premium-ui
+  workflow_dispatch:
+
+jobs:
+  docker-smoke-test:
+    name: Build & Smoke-Test Integrated Container
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Verify Frontend Reproducibility
+        run: |
+          cd frontend
+          npm ci
+          npm run lint
+          npm run build:standalone
+          cd ..
+
+      - name: Build Root Docker Image
+        run: |
+          echo "Building integrated NewGenHealthAI Docker image..."
+          docker build -t newgenhealthai:test .
+
+      - name: Start Integrated Test Container
+        run: |
+          echo "Starting test container with synthetic non-production configuration..."
+          docker run -d \
+            --name healthai-test \
+            -p 7860:7860 \
+            -e PORT=7860 \
+            -e ALLOW_MODEL_DOWNLOADS=false \
+            -e SESSION_SECRET_KEY=synthetic_test_secret_key_minimum_32_characters_ci \
+            -e ALLOWED_ORIGINS=http://localhost:7860 \
+            -e TRUSTED_PROXIES=127.0.0.1,::1 \
+            newgenhealthai:test
+
+      - name: Wait for Container Readiness
+        run: |
+          echo "Waiting for backend service to report healthy on port 7860..."
+          for i in {1..30}; do
+            if curl -s -f http://localhost:7860/api/v1/health | grep -q '"status":"healthy"'; then
+              echo "Container health check passed on attempt $i!"
+              break
+            fi
+            echo "Waiting for health endpoint... (attempt $i/30)"
+            sleep 2
+          done
+
+      - name: Verify Non-Root Execution
+        run: |
+          CONTAINER_USER=$(docker exec healthai-test whoami)
+          echo "Container executing as user: $CONTAINER_USER"
+          if [ "$CONTAINER_USER" != "user" ]; then
+            echo "FAILED: Container must run as non-root user 'user'"
+            exit 1
+          fi
+
+      - name: Smoke-Test Static Frontend Serving
+        run: |
+          HTML_OUTPUT=$(curl -sS http://localhost:7860/)
+          echo "Verifying root HTML title..."
+          echo "$HTML_OUTPUT" | grep -q "NewGenHealthAI"
+          echo "Root HTML verified."
+
+      - name: Smoke-Test Unauthenticated Security Enforcement
+        run: |
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:7860/api/v1/sessions)
+          echo "Unauthenticated /sessions status: $HTTP_STATUS"
+          if [ "$HTTP_STATUS" != "401" ]; then
+            echo "FAILED: Expected 401 Unauthorized, received $HTTP_STATUS"
+            exit 1
+          fi
+
+      - name: Smoke-Test Authentication & Session Lifecycle
+        run: |
+          echo "Registering synthetic user in container..."
+          REG_RES=$(curl -sS -X POST http://localhost:7860/api/v1/auth/register \
+            -H "Content-Type: application/json" \
+            -d '{"username":"ci_container_user","password":"ContainerPassword123!"}')
+          echo "Registration response: $REG_RES"
+          TOKEN=$(echo "$REG_RES" | grep -o '"token":"[^"]*' | cut -d'"' -f4)
+          if [ -z "$TOKEN" ]; then
+            echo "FAILED: Could not extract token from registration response"
+            exit 1
+          fi
+
+          echo "Listing sessions with authenticated token..."
+          SESS_RES=$(curl -sS -H "Authorization: Bearer $TOKEN" http://localhost:7860/api/v1/sessions)
+          echo "Sessions response: $SESS_RES"
+          echo "$SESS_RES" | grep -q '"success":true'
+
+          echo "Creating new chat consultation..."
+          NEW_CHAT_RES=$(curl -sS -X POST -H "Authorization: Bearer $TOKEN" http://localhost:7860/api/v1/new-chat)
+          echo "New chat response: $NEW_CHAT_RES"
+          echo "$NEW_CHAT_RES" | grep -q '"session_id"'
+
+      - name: Collect Container Diagnostics on Failure
+        if: always()
+        run: |
+          echo "--- Container Logs (last 100 lines) ---"
+          docker logs --tail 100 healthai-test || true
+
+      - name: Teardown Test Container
+        if: always()
+        run: |
+          docker rm -f healthai-test || true

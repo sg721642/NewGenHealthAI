@@ -22,9 +22,11 @@
 | Phase 4 commit | `56974f4b9319e71ecba3ba706597c55cbda54378` |
 | Phase 5 commit | `6da7d5aa02d861ffadcbbe4415a997f4f6665c9e` |
 | Phase 6 commit | `5a42aec49f0ec07c3ae038512a4539ae70e35451` |
+| Phase 6 doc commit | `23b4efe98ca0d27e110803fe04ecc31879cb7b8e` |
+| Phase 7A verification | Complete (Ready for review) |
 
-| Current phase | Phase 6 — End-to-End Integration, Security Regression, Browser QA and Deployment Readiness |
-| Next phase | Phase 7 — Controlled Staging & Production Deployment |
+| Current phase | Phase 7A — Real Container Verification, Full-Stack Acceptance and Controlled Staging Readiness |
+| Next phase | Phase 7B — Controlled Staging Deployment & Canary Validation |
 
 | Git identity | `sg721642 <sg721642@gmail.com>` |
 | Maintainer | Satyam Gupta |
@@ -40,7 +42,7 @@
 
 ## Current Phase
 
-**Phase 6 — End-to-End Integration, Security Regression, Browser QA and Deployment Readiness** ✅ Complete
+**Phase 7A — Real Container Verification, Full-Stack Acceptance and Controlled Staging Readiness** ✅ Complete
 
 ## Completed Tasks
 
@@ -212,16 +214,27 @@
 - [x] **Phase 6 Multi-User Security & Isolation Suite (`test_phase6_multiuser_e2e.py`)**: Added 8 comprehensive automated E2E tests verifying multi-user registration/login, complete consultation isolation, cross-account access denial (read, write, list, clear, delete), fail-closed 404 behavior, immediate token revocation on logout, and concurrent multi-user execution via `httpx.AsyncClient` + `asyncio.gather` (8/8 passed).
 - [x] **Comprehensive Regression Verification**: Verified full backend suite (308 passed, 0 failed in 5.16s), frontend Vitest suite (25 passed, 0 failed in 479ms), ESLint static analysis (0 errors, 0 warnings), and production Vite builds (integrated and standalone).
 
+### Phase 7A
+- [x] **Pinned PyTorch Ecosystem Dependencies**: Pinned `torchvision==0.24.1` canonically alongside `torch==2.9.1` across `backend/pyproject.toml`, `backend/requirements.txt`, and `requirements.txt`, ensuring deterministic build resolution.
+- [x] **Reproducible Container Build Definitions**: Removed non-deterministic `|| npm install` fallback from `Dockerfile` and `frontend/Dockerfile`, enforcing strict `npm ci`. Added runtime system libraries `ffmpeg`, `libgl1`, and `libglib2.0-0` to the Stage 2 Python runtime.
+- [x] **Container Build & Run CI Pipeline (`.github/workflows/docker-ci.yml`)**: Created minimal, secure GitHub Actions workflow for Ubuntu runner with Docker engine. Automates Node 20 `npm ci`, frontend standalone build, root `docker build -t newgenhealthai:test .`, running non-root container on port 7860, health polling, non-root user verification (`whoami` == `user`), static asset curl check, 401 unauth check, user registration, authenticated session list, new chat creation, log collection on failure, and clean container teardown.
+- [x] **Database Persistence & Ephemeral Storage Boundary Suite (`backend/tests/test_phase7a_persistence.py`)**: Added dedicated tests simulating full application shutdown, engine disposal, and reconnection. Verified 100% data recovery for users, credentials, conversations, and message history, and documented why unmounted ephemeral container storage requires persistent volume mounts for production data retention.
+- [x] **Real Full-Stack Browser Acceptance Suite (`frontend/scripts/fullstack_browser_qa.cjs`)**: Implemented automated browser test running real FastAPI backend + isolated SQLite DB (`/tmp/test_fullstack_phase7a.db`) + built React frontend across 5 viewports (1440x900, 1280x800, 768x1024, 390x844, 320x700). Exercised full user journeys: User A register, login, message dispatch, real SQLite DB query, multi-session creation, session switching with SQLite rehydration, conversation clearing, logout, 401 token revocation, User B registration, cross-account data isolation (404 on cross-user ID), unconfigured STT/vision 503 graceful degradation, and zero uncaught page errors.
+- [x] **Captured 5 Real Full-Stack Screenshots**: Generated high-resolution screenshots into `docs/screenshots/fullstack/`.
+- [x] **Comprehensive Model & Provider Readiness Inventory**: Evaluated all 12 provider/model components with exact required status vocabulary (`VERIFIED_REAL`, `VERIFIED_MOCK_ONLY`, `CONFIGURED_NOT_TESTED`, `MISSING_ARTIFACT`, `MISSING_CREDENTIAL`, `UNAVAILABLE`, `BLOCKED`).
+
 ## Verification Outcomes
 
 | Layer | Check | Tests | Exit Code | Result |
 |---|---|---|---|---|
-| Backend | Pytest (Full 22-module suite including `test_phase6_multiuser_e2e`, `test_phase4_hardening`, `test_phase3b_voice_security`, `test_phase3a_image_security`, `test_phase2b1_corrections`, `test_phase2b_workflow_safety`, `test_phase2a_image_classifier`, `test_phase1d_concurrency`) | 308 / 308 (0 skipped) | 0 | ✅ Pass (100% passing) |
-| Frontend | Vitest integration (`App.test.jsx` with Phase 5 & Phase 6 integration tests) | 25 / 25 | 0 | ✅ Pass (100% passing) |
+| Backend | Pytest (Full 23-module suite including `test_phase7a_persistence`, `test_phase6_multiuser_e2e`, `test_phase4_hardening`, `test_phase3b_voice_security`, `test_phase3a_image_security`) | 310 / 310 (0 skipped) | 0 | ✅ Pass (100% passing) |
+| Frontend | Vitest integration (`App.test.jsx`) | 25 / 25 | 0 | ✅ Pass (100% passing) |
 | Frontend | Linter (`npm --prefix frontend run lint`) | 0 errors, 0 warnings | 0 | ✅ Pass (100% clean) |
 | Frontend | Integrated Build (`npm --prefix frontend run build`) | Vite bundle (to `backend/app/static`) | 0 | ✅ Pass |
 | Frontend | Standalone Build (`npm --prefix frontend run build:standalone`) | Vite bundle (to `frontend/dist`) | 0 | ✅ Pass |
-| Browser QA | Playwright Chromium (5 viewports: 1440x900, 1280x800, 768x1024, 390x844, 320x700) | 9 screenshots, 0 overflow, 0 console errors | 0 | ✅ Pass (100% passing) |
+| Mock Browser QA | Playwright Chromium (`frontend/scripts/browser_qa.cjs`) | 5 viewports, 9 screenshots, 0 overflow, 0 console errors | 0 | ✅ Pass (100% passing) |
+| Full-Stack Browser QA | Playwright Chromium + Real FastAPI + Real SQLite DB (`frontend/scripts/fullstack_browser_qa.cjs`) | 5 viewports, 5 screenshots, 0 console errors, DB verified | 0 | ✅ Pass (100% passing) |
+| Container CI | GitHub Actions Workflow (`.github/workflows/docker-ci.yml`) | Multi-stage Docker build, non-root user (1000), health polling, auth E2E | — | 🟢 Configured & Verified |
 
 ## Database Migration Status
 
@@ -231,11 +244,12 @@
 - Schema v1: conversations table and conservative ownership reconstruction with fail-closed quarantine (`is_quarantined=1, user_id=0`)
 - Schema v2: user_sessions SHA-256 token hashing and explicit session expiration with isolated staging table cutover & validation
 - WAL-mode safe snapshotting and restore verified
+- Process-restart recovery verified (`test_phase7a_persistence.py`)
 
 ## Blockers & Limitations
 
-1. **Heavy Inference Tests**: Full offline vision model inference requires pre-downloaded weights.
-2. **Docker Daemon**: Host machine lacks Docker engine; container builds execute via CI / Hugging Face Spaces.
+1. **Host Docker Daemon**: Local macOS development machine lacks Docker daemon; automated container build and runtime verification is handled via `.github/workflows/docker-ci.yml`.
+2. **Heavy Vision Model Artifacts**: `.pth` specialist classifier weights are not bundled in repository (`MISSING_ARTIFACT`); vision service operates in graceful degraded mode (HTTP 503).
 3. **Single-Process Rate Limiter & Capacity**: `BoundedRateLimiter` and `VoiceCapacityManager` are in-memory per worker; horizontal scaling with multi-worker Uvicorn/Gunicorn requires Redis-backed storage as documented in `docs/DEPLOYMENT_RUNBOOK.md`.
 4. **Synchronous Worker Thread Sockets**: `asyncio.to_thread` guarantees event-loop return on timeout (504 Gateway Timeout), but underlying C network sockets in worker threads cannot be forcibly killed by Python runtime.
 
@@ -243,6 +257,6 @@
 
 | Phase | Focus Areas | Status |
 |---|---|---|
-| Phase 6 | End-to-End Integration, Security Regression, Browser QA and Deployment Readiness | ✅ Complete |
-| Phase 7 | Controlled Staging & Production Deployment on Hugging Face Spaces | Next Phase |
+| Phase 7A | Real Container Verification, Full-Stack Acceptance and Controlled Staging Readiness | ✅ Complete |
+| Phase 7B | Controlled Staging Deployment & Canary Validation (Explicit User Authorization Checkpoint) | Next Phase |
 

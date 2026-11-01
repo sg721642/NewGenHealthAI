@@ -256,20 +256,26 @@ async def get_diagnostics():
     Operational readiness check for vision service models.
     Does NOT leak internal filesystem paths, directory structures, or deployment secrets.
     """
-    from app.services.disease_classifier import disease_classifier
-
-    loaded_models = [k for k, v in disease_classifier.model_status.items() if v == "ready"]
-    status_map = {
-        kw: disease_classifier.model_status.get(kw, "unavailable")
-        for kw in ["skin", "xray", "retina", "general"]
-    }
+    try:
+        from app.services.disease_classifier import disease_classifier
+        loaded_models = [k for k, v in disease_classifier.model_status.items() if v == "ready"]
+        status_map = {
+            kw: disease_classifier.model_status.get(kw, "unavailable")
+            for kw in ["skin", "xray", "retina", "general"]
+        }
+        device_str = str(disease_classifier.device)
+    except Exception as e:
+        logger.warning("Diagnostics check: vision models unavailable (%s)", type(e).__name__)
+        loaded_models = []
+        status_map = {kw: "unavailable" for kw in ["skin", "xray", "retina", "general"]}
+        device_str = "cpu"
 
     return {
         "status": "ready" if len(loaded_models) > 0 else "degraded",
         "service": "NewGenHealthAI Vision Service",
         "loaded_models_count": len(loaded_models),
         "models": status_map,
-        "device": str(disease_classifier.device),
+        "device": device_str,
     }
 
 

@@ -890,6 +890,7 @@ export default function App() {
 
         {/* Sidebar Navigation */}
         <Sidebar
+          sidebarOpen={sidebarOpen}
           isOpen={sidebarOpen}
           sessions={sessions}
           currentSessionId={currentSessionId}
