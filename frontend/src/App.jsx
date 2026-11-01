@@ -495,8 +495,12 @@ export default function App() {
             headers: authHeaders(),
           });
           if (res.ok) {
-            await loadSessions();
-            createNewChat();
+            setCurrentSessionId(null);
+            currentSessionIdRef.current = null;
+            setMessages([]);
+            setChatHistory([]);
+            setSessions([]);
+            setShowWelcome(true);
             showToast('All consultations cleared', 'success');
           } else {
             showToast('Failed to clear consultations', 'error');
@@ -845,6 +849,10 @@ export default function App() {
         if (!request.isValid(currentSessionIdRef.current)) return;
 
         if (data.success) {
+          if (data.session_id && currentSessionIdRef.current !== data.session_id) {
+            setCurrentSessionId(data.session_id);
+            currentSessionIdRef.current = data.session_id;
+          }
           const botMsg = {
             type: 'assistant',
             content: data.response,
@@ -872,7 +880,7 @@ export default function App() {
           showToast('Error occurred', 'error');
         }
       } catch (err) {
-        if (err && err.name === 'AbortError') return;
+        if (request.signal.aborted || (err && (err.name === 'AbortError' || err.message?.includes('aborted')))) return;
         if (!request.isValid(currentSessionIdRef.current)) return;
         setMessages((prev) => [
           ...prev,

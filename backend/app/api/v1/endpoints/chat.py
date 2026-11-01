@@ -67,9 +67,12 @@ async def chat_endpoint(
     req.session["session_id"] = session_id
 
     try:
-        return await clinical_engine.process_message(
+        res = await clinical_engine.process_message(
             session_id, request.message, user_id=current_user.id
         )
+        if isinstance(res, dict):
+            res["session_id"] = session_id
+        return res
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
