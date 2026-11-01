@@ -116,35 +116,52 @@ def check_urgent_risk(text: str) -> Optional[Dict[str, Any]]:
 
 
 def generate_urgent_advisory(category: str, title: str) -> str:
-    """Construct deterministic emergency response message."""
+    """
+    Construct deterministic emergency response message.
+
+    Emergency numbers listed below are static reference information for common
+    regions. This tool does NOT infer a user's country from their symptoms or
+    message content. If your emergency number is not listed, call your local
+    emergency services number immediately.
+    """
     if category == "crisis":
         return (
             "## 🚨 Immediate Emergency & Crisis Assistance Required\n\n"
             "**If you or someone you know is in immediate danger or experiencing thoughts of self-harm, "
             "please reach out for immediate professional support:**\n\n"
-            "- **In the US and Canada:** Call or text **988** to reach the Suicide & Crisis Lifeline, or call **911**.\n"
-            "- **In the UK:** Call **111** (NHS mental health services) or **999** for immediate emergency.\n"
-            "- **In the EU / International:** Call **112** or your local emergency telephone number.\n"
-            "- **Crisis Text Line:** Text **HOME** to **741741** (US and Canada) or **85258** (UK).\n\n"
-            "Please speak with someone immediately. Support is confidential, free, and available 24/7.\n\n"
-            "> **Safety Notice:** Automated tools cannot provide crisis intervention or emergency medical care."
+            "- **India:** Call **iCall: 9152987821** or **Vandrevala Foundation: 1860-2662-345** (24/7). "
+            "For immediate physical danger call **112**.\n"
+            "- **US and Canada:** Call or text **988** (Suicide & Crisis Lifeline) or call **911**.\n"
+            "- **UK:** Call **111** (NHS mental health) or **999** (immediate emergency).\n"
+            "- **EU / most countries:** Call **112** (pan-European emergency) or your local emergency number.\n"
+            "- **Crisis Text Line (US/CA):** Text **HOME** to **741741**. "
+            "**Crisis Text Line (UK):** Text **85258**.\n\n"
+            "**If you are outside the regions listed above, call your local emergency telephone number immediately.**\n\n"
+            "Please speak with someone now. Support is confidential, free, and available 24/7.\n\n"
+            "> **Safety Notice:** Automated tools cannot provide crisis intervention or emergency medical care. "
+            "Emergency service numbers listed are static reference information and may not be exhaustive."
         )
 
     return (
         f"## 🚨 Emergency Medical Alert: {title}\n\n"
         "**Based on the symptoms you reported, you may be experiencing a medical emergency that requires "
-        "immediate, in-person evaluation.**\n\n"
-        "### Recommended Immediate Actions:\n"
-        "1. **Call emergency services immediately:**\n"
-        "   - **911** (United States & Canada)\n"
-        "   - **999** (United Kingdom)\n"
-        "   - **112** (European Union & International)\n"
-        "   - Or your local emergency contact number.\n"
-        "2. **Go to the nearest hospital Emergency Department (ED)** if transport can be safely and rapidly arranged.\n"
-        "3. **Do not attempt to drive yourself** if experiencing severe chest pain, shortness of breath, dizziness, or weakness; call for an ambulance.\n"
-        "4. If someone is with you, alert them to your symptoms immediately.\n\n"
-        "**Do not wait for symptom follow-ups or online AI consultations during an acute medical emergency.**\n\n"
-        "> **Important Clinical Limitation:** Automated heuristic screening is not a clinical assessment, cannot replace "
-        "a physical examination or diagnostic testing, and does not guarantee detection of all medical emergencies. "
-        "If you feel severely unwell, deteriorate, or are uncertain, seek emergency medical care immediately."
+        "immediate, in-person evaluation. Do not wait — contact emergency services now.**\n\n"
+        "### Call Emergency Services Immediately\n"
+        "Contact the emergency number for your location:\n"
+        "- **India: 112** (all-in-one national emergency)\n"
+        "- **US and Canada: 911**\n"
+        "- **UK: 999**\n"
+        "- **EU and many other countries: 112**\n"
+        "- **If your country is not listed:** Dial your local emergency services number immediately.\n\n"
+        "### Additional Recommended Actions\n"
+        "1. **Go to the nearest hospital Emergency Department (ED)** if safe and rapid transport can be arranged.\n"
+        "2. **Do not attempt to drive yourself** if experiencing severe chest pain, shortness of breath, "
+        "dizziness, or muscle weakness — call for an ambulance.\n"
+        "3. **Alert anyone nearby** to your symptoms immediately.\n"
+        "4. **Do not wait for online consultations or AI follow-up questions** during an acute medical emergency.\n\n"
+        "> **Important Clinical Limitation:** This automated heuristic screening is NOT a clinical assessment, "
+        "cannot replace a physical examination or diagnostic testing, and does not detect all medical emergencies. "
+        "If you feel severely unwell, are deteriorating, or are uncertain whether this is an emergency, "
+        "seek emergency care immediately — do not wait for further assessment."
     )
+

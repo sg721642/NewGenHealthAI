@@ -247,7 +247,7 @@ If enough information gathered:
                 "max_rounds": MAX_TRIAGE_ROUNDS,
             }
 
-            logger.info("Triage: round %d — asking: '%s'", triage_round + 1, question_text[:80])
+            logger.info("Triage: round %d — follow-up question queued (chars=%d)", triage_round + 1, len(question_text))
 
         else:
             state["triage_status"] = "ready_to_diagnose"
@@ -255,7 +255,7 @@ If enough information gathered:
             logger.info("Triage: sufficient symptom details — proceeding to educational assessment")
 
     except Exception as e:
-        logger.error("Triage: LLM call failed: %s", str(e))
+        logger.error("Triage: LLM call failed (%s)", type(e).__name__)
         state["triage_status"] = "ready_to_diagnose"
         state["question"] = _build_enriched_question(collected)
 

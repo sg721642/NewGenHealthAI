@@ -19,22 +19,53 @@ def _sanitize_text(text: str) -> str:
 
 
 def _format_provenance_citations(documents: List) -> str:
-    """Format verified citations only when actual provenance metadata exists."""
+    """
+    Format citations only when actual provenance metadata exists.
+
+    Security constraints:
+    - Only HTTPS URLs are accepted; javascript:, data:, http:, and malformed
+      URLs are silently dropped to prevent XSS and phishing vectors.
+    - Titles are sourced from metadata only (not LLM output); markdown special
+      characters are escaped to prevent injection via document titles.
+    - A citation is marked as 'source-present' only (not independently verified).
+    """
     citations = []
-    seen = set()
+    seen: set = set()
+
+    def _is_safe_url(url: str) -> bool:
+        """Accept only HTTPS URLs with a valid host."""
+        if not url:
+            return False
+        stripped = url.strip().lower()
+        # Reject dangerous or non-HTTPS schemes
+        if not stripped.startswith("https://"):
+            return False
+        # Reject trivially malformed URLs (no host after scheme)
+        rest = url.strip()[len("https://"):]
+        return bool(rest and "." in rest.split("/")[0])
+
+    def _escape_md(text: str) -> str:
+        """Escape markdown link-breaking characters in untrusted text."""
+        # Escape [ ] ( ) characters that could break markdown link syntax
+        return re.sub(r"([\[\]()])", r"\\\1", text)
+
     for doc in documents:
         meta = getattr(doc, "metadata", {}) or {}
-        title = meta.get("title") or meta.get("source")
-        url = meta.get("url")
-        if title and title not in seen:
-            seen.add(title)
-            if url:
-                citations.append(f"- [{title}]({url})")
+        title = meta.get("title") or meta.get("source") or ""
+        url = meta.get("url", "").strip()
+
+        safe_url = url if _is_safe_url(url) else ""
+        safe_title = _escape_md(title[:120]) if title else ""
+
+        if safe_title and safe_title not in seen:
+            seen.add(safe_title)
+            if safe_url:
+                citations.append(f"- [{safe_title}]({safe_url})")
             else:
-                citations.append(f"- {title}")
-        elif url and url not in seen:
-            seen.add(url)
-            citations.append(f"- [{url}]({url})")
+                citations.append(f"- {safe_title}")
+        elif safe_url and safe_url not in seen:
+            seen.add(safe_url)
+            citations.append(f"- [{safe_url}]({safe_url})")
 
     if citations:
         return "\n\n### 📚 Referenced Sources\n" + "\n".join(citations)
@@ -75,17 +106,26 @@ def ExecutorAgent(state: AgentState) -> AgentState:
     # ── 3. Check for total provider exhaustion / failure ───────────────
     has_docs = bool(state.get("documents") and len(state["documents"]) > 0)
     has_llm = bool(state.get("llm_success") and state.get("generation"))
+    all_providers_exhausted = bool(state.get("exhaustion_reason"))
     llm = get_llm()
 
-    if not has_docs and not has_llm and not llm:
-        logger.warning("Executor: All providers offline or exhausted — terminating with service unavailable")
+    # Terminate immediately if:
+    # (a) all providers failed and no pre-generated content exists, OR
+    # (b) the fallback chain explicitly flagged exhaustion via exhaustion_reason
+    #     (prevents unbounded secondary LLM calls after budget is spent)
+    if all_providers_exhausted or (not has_docs and not has_llm and not llm):
+        exhaust_reason = state.get("exhaustion_reason", "no_providers_available")
+        logger.warning(
+            "Executor: provider exhaustion — terminating (reason=%s, result_state=PROVIDER_UNAVAILABLE)",
+            exhaust_reason,
+        )
         state["is_failed_generation"] = True
         state["source"] = "Service Unavailable"
         state["generation"] = (
             "Our health information service is temporarily unavailable. "
             "If you are experiencing concerning symptoms, please consult your healthcare provider or local clinic directly."
         )
-        # Note: Do not append failed generation to conversation history as a successful medical turn
+        # Do not append failed generation to conversation history as a successful medical turn
         return state
 
     question = state.get("question", "")
@@ -152,7 +192,7 @@ def ExecutorAgent(state: AgentState) -> AgentState:
             source_info = "Educational Health Assessment" if not has_docs else "Educational Assessment + Medical Literature"
             logger.info("Executor: Generated comprehensive educational assessment")
         except Exception as e:
-            logger.error("Executor: Post-triage LLM generation failed: %s", str(e))
+            logger.error("Executor: post-triage LLM generation failed (%s)", type(e).__name__)
             answer = (
                 "Based on the symptoms you reported, we recommend consulting a qualified healthcare professional "
                 "for a full clinical examination and diagnosis. Please visit a clinic or hospital if symptoms persist or worsen."
@@ -189,7 +229,7 @@ def ExecutorAgent(state: AgentState) -> AgentState:
             source_info = state.get("source") or "Medical Literature Database"
             logger.info("Executor: Generated response from documents")
         except Exception as e:
-            logger.error("Executor: LLM generation failed: %s", str(e))
+            logger.error("Executor: RAG LLM generation failed (%s)", type(e).__name__)
             answer = (
                 "For accurate clinical evaluation, please consult with a healthcare professional "
                 "who can properly examine your symptoms."

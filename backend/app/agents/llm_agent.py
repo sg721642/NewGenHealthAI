@@ -93,7 +93,7 @@ def LLMAgent(state: AgentState) -> AgentState:
             logger.warning("LLM: Response too short or empty")
 
     except Exception as e:
-        logger.error("LLM: Generation failed: %s", str(e))
+        logger.error("LLM: generation failed (%s)", type(e).__name__)
         state["llm_success"] = False
 
     return state

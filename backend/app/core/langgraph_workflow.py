@@ -50,6 +50,8 @@ def _route_after_llm(state: AgentState) -> str:
         return "wikipedia"
     if "tavily" not in attempted and not state.get("tavily_attempted"):
         return "tavily"
+    # All providers exhausted without success — flag for executor to terminate early
+    state["exhaustion_reason"] = "all_providers_attempted_after_llm"
     return "executor"
 
 
@@ -64,6 +66,8 @@ def _route_after_rag(state: AgentState) -> str:
         return "wikipedia"
     if "tavily" not in attempted and not state.get("tavily_attempted"):
         return "tavily"
+    # All providers exhausted without success — flag for executor to terminate early
+    state["exhaustion_reason"] = "all_providers_attempted_after_rag"
     return "executor"
 
 
@@ -76,6 +80,7 @@ def _route_after_llm_fallback(state: AgentState) -> str:
         return "wikipedia"
     if "tavily" not in attempted and not state.get("tavily_attempted"):
         return "tavily"
+    state["exhaustion_reason"] = "all_providers_attempted_after_llm_fallback"
     return "executor"
 
 
@@ -86,11 +91,16 @@ def _route_after_wiki(state: AgentState) -> str:
     attempted = state.get("attempted_providers", [])
     if "tavily" not in attempted and not state.get("tavily_attempted"):
         return "tavily"
+    # Wikipedia and tavily both exhausted
+    state["exhaustion_reason"] = "all_providers_attempted_after_wiki"
     return "executor"
 
 
 def _route_after_tavily(state: AgentState) -> str:
     """Terminal routing after Tavily web search."""
+    # Tavily is the last fallback; if it also failed, mark exhaustion
+    if not state.get("tavily_success"):
+        state["exhaustion_reason"] = "all_providers_attempted_tavily_failed"
     return "executor"
 
 

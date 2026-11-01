@@ -16,8 +16,9 @@
 | Phase 1D commit | `256c86d649d0dd67c916892664d7f41d7919fabc` |
 | Phase 2A commit | `b67abedd2a69b141e450372099c186ca73e48bd6` |
 | Phase 2B commit | `0995690914b44fe496c2277c1e56181fac82a52c` |
+| Phase 2B.1 commit | Pending verification & push |
 
-| Current phase | Phase 2B — Bounded Clinical Workflow and Medical-Response Safety |
+| Current phase | Phase 2B.1 — Final Workflow Reliability, Privacy and Emergency-Safety Corrections |
 
 | Git identity | `sg721642 <sg721642@gmail.com>` |
 | Maintainer | Satyam Gupta |
@@ -33,7 +34,7 @@
 
 ## Current Phase
 
-**Phase 2B — Bounded Clinical Workflow and Medical-Response Safety** ✅ Complete
+**Phase 2B.1 — Final Workflow Reliability, Privacy and Emergency-Safety Corrections** ✅ Complete
 
 ## Completed Tasks
 
@@ -117,14 +118,27 @@
 - [x] **Failed-Generation Persistence Safety**: Guaranteed that provider exhaustion returns `success=False`, `source="Service Unavailable"` and is not persisted to the database as a successful clinical consultation.
 - [x] **Real LangGraph Compilation & 23-Test Suite**: Compiled and executed StateGraph offline with mocked providers in `test_phase2b_workflow_safety.py` (23/23 tests passing, total backend suite: 199/199 passing).
 
+### Phase 2B.1
+- [x] **Bounded Consultation Deadline & Native Async Execution (A05)**: Added `CONSULTATION_TIMEOUT_SECONDS` (90s default) enforced via `asyncio.wait_for` wrapping the LangGraph workflow. Handled `asyncio.TimeoutError` gracefully without blocking the ASGI event loop.
+- [x] **Guaranteed Lock Release on Cancellation/Timeout (A05)**: Verified `ConversationLockManager` strictly releases per-conversation locks in `_LockContext.__aexit__` across timeouts, cancellations, and exceptions.
+- [x] **Post-Exhaustion Call Prevention (A05)**: Configured routing functions to set `exhaustion_reason` when all providers are exhausted. `ExecutorAgent` immediately terminates with `source="Service Unavailable"` and `is_failed_generation=True` without triggering secondary unbounded LLM calls.
+- [x] **Unified Result-State Taxonomy (A05)**: Defined consistent result categories: `SUCCESSFUL_EDUCATIONAL`, `SUCCESSFUL_URGENT`, `CLARIFICATION_QUESTION`, `INCONCLUSIVE`, `PROVIDER_UNAVAILABLE`, `PROVIDER_TIMEOUT`, `INTERNAL_ERROR`. Aligned `is_failed_generation`, API success, HTTP status, and database persistence.
+- [x] **External Search Privacy Protection (A08)**: Removed raw question retry fallback from Wikipedia and Tavily agents. Built allowlisted generic medical term extractor (`_MEDICAL_TERM_ALLOWLIST`); if no allowlisted medical terms are identified, external search is declined, completely preventing transmission of unredacted personal symptoms.
+- [x] **Sensitive Transcript & Exception Log Redaction (A08)**: Redacted question text from triage logs (logging character count only). Redacted exception details in `chat_service.py`, `triage_agent.py`, `wikipedia.py`, `tavily.py`, `llm_agent.py`, and `executor.py` (logging `type(e).__name__` only) to prevent credential, prompt, or patient text exposure.
+- [x] **Emergency Localization (A17)**: Added India 112 national emergency and 24/7 mental health crisis helplines (iCall, Vandrevala Foundation) alongside US/CA (911/988), UK (999/111), and EU (112). Added safe default guidance for unlisted countries without inferring country from symptoms.
+- [x] **Conservative Clinical Uncertainty (A17)**: Replaced definitive emergency statements with conservative phrasing ("may be experiencing"). Explicitly acknowledged clinical limitations (heuristic screening does not detect 100% of emergencies).
+- [x] **Provenance & HTTPS-Only Citation Validation**: Enforced strict URL scheme validation in `_format_provenance_citations`, accepting only HTTPS URLs and dropping `javascript:`, `data:`, `http:`, and malformed URLs. Escaped Markdown special characters in document titles to prevent link formatting attacks.
+- [x] **Comprehensive Phase 2B.1 Regression Suite**: Added 28 new automated integration tests in `test_phase2b1_corrections.py` and updated `test_agents.py` with privacy tests (total backend suite: 229/229 passing).
+
 ## Verification Outcomes
 
 | Layer | Check | Tests | Exit Code | Result |
 |---|---|---|---|---|
-| Backend | Pytest (Full 17-module suite including `test_phase2b_workflow_safety`, `test_phase2a_image_classifier`, `test_phase1d_concurrency`) | 199 / 199 (0 skipped) | 0 | ✅ Pass (100% passing) |
+| Backend | Pytest (Full 18-module suite including `test_phase2b1_corrections`, `test_phase2b_workflow_safety`, `test_phase2a_image_classifier`, `test_phase1d_concurrency`) | 229 / 229 (0 skipped) | 0 | ✅ Pass (100% passing) |
 | Frontend | Vitest integration (`App.test.jsx`) | 11 / 11 | 0 | ✅ Pass (0 failures) |
 | Frontend | Linter (`npm --prefix frontend run lint`) | 0 errors, 0 warnings | 0 | ✅ Pass (100% clean) |
 | Frontend | Build (`npm --prefix frontend run build`) | Vite bundle | 0 | ✅ Pass |
+
 
 ## Database Migration Status
 

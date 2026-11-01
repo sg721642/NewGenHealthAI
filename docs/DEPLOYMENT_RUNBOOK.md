@@ -1,6 +1,6 @@
 # NewGenHealthAI — Deployment Runbook
 
-> **Status**: Phase 2B (Bounded Clinical Workflow and Medical-Response Safety).
+> **Status**: Phase 2B.1 (Final Workflow Reliability, Privacy and Emergency-Safety Corrections).
 > Runbook is authoritative for the Docker + Hugging Face Spaces deployment path.
 
 ## Architecture
@@ -22,6 +22,7 @@ GitHub (sg721642/NewGenHealthAI)
 | `SESSION_SECRET_KEY` / `SESSION_SECRET` | Yes | Starlette session cookie signing (must be at least 32 characters in production) |
 | `LEGACY_PBKDF2_SALT` | Optional (Migration) | Migration-only salt for legacy PBKDF2 password upgrades to Argon2id |
 | `SESSION_EXPIRE_HOURS` | Optional | Session token validity duration in hours (default: `24`) |
+| `CONSULTATION_TIMEOUT_SECONDS` | Optional | Overall per-consultation wall-clock timeout in seconds (default: `90`) |
 | `ALLOWED_ORIGINS` | Optional | Comma-separated list of allowed CORS origins (default: localhost & 127.0.0.1 ports 5173/8000) |
 | `TRUSTED_PROXIES` | Optional | Comma-separated list of trusted reverse proxy IPs and CIDR networks (default: `127.0.0.1,::1`). Set to include reverse proxy CIDRs (e.g. `10.0.0.0/8,172.16.0.0/12`) on Hugging Face Spaces or cloud proxies. |
 | `CHAT_DB_PATH` | Optional | Override SQLite path (default: `backend/storage/chat_db/susham_health.db`) |

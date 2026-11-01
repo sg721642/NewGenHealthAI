@@ -1,6 +1,6 @@
 # NewGenHealthAI — Test Evidence & Verification Records
 
-Last updated: Phase 1D (Conversation Memory Isolation, Concurrency and Persistence)
+Last updated: Phase 2B.1 (Final Workflow Reliability, Privacy and Emergency-Safety Corrections)
 
 ## Phase 1B Test Execution Summary
 
@@ -494,24 +494,25 @@ Outcome:
 Suite Breakdown:
 | Test File | Total | Passed | Failed | Skipped | Status |
 |---|---|---|---|---|---|
-| `test_agents.py` | 18 | 18 | 0 | 0 | Passed |
+| `test_agents.py` | 20 | 20 | 0 | 0 | Passed |
 | `test_api.py` | 10 | 10 | 0 | 0 | Passed |
-| `test_api_edge_cases.py` | 12 | 12 | 0 | 0 | Passed |
-| `test_app.py` | 7 | 7 | 0 | 0 | Passed |
-| `test_auth_hardening.py` | 13 | 13 | 0 | 0 | Passed |
-| `test_coverage_gaps.py` | 7 | 7 | 0 | 0 | Passed |
+| `test_api_edge_cases.py` | 4 | 4 | 0 | 0 | Passed |
+| `test_app.py` | 1 | 1 | 0 | 0 | Passed |
+| `test_auth_hardening.py` | 14 | 14 | 0 | 0 | Passed |
+| `test_coverage_gaps.py` | 9 | 9 | 0 | 0 | Passed |
 | `test_database.py` | 3 | 3 | 0 | 0 | Passed |
 | `test_logging.py` | 4 | 4 | 0 | 0 | Passed |
-| `test_phase1c1_hardening.py` | 16 | 16 | 0 | 0 | Passed |
+| `test_phase1c1_hardening.py` | 13 | 13 | 0 | 0 | Passed |
 | `test_phase1d_concurrency.py` | 15 | 15 | 0 | 0 | Passed |
 | `test_phase2a_image_classifier.py` | 36 | 36 | 0 | 0 | Passed |
 | `test_phase2b_workflow_safety.py` | 23 | 23 | 0 | 0 | Passed |
-| `test_security_ownership.py` | 12 | 12 | 0 | 0 | Passed |
+| `test_phase2b1_corrections.py` | 28 | 28 | 0 | 0 | Passed |
+| `test_security_ownership.py` | 18 | 18 | 0 | 0 | Passed |
 | `test_services.py` | 11 | 11 | 0 | 0 | Passed |
 | `test_tools.py` | 12 | 12 | 0 | 0 | Passed |
 | `test_workflow.py` | 1 | 1 | 0 | 0 | Passed |
 | `test_workflow_routing.py` | 7 | 7 | 0 | 0 | Passed |
-| **Total Suite** | **199** | **199** | **0** | **0** | **Passed** |
+| **Total Suite** | **229** | **229** | **0** | **0** | **Passed** |
 
 Phase 2B Verification Matrix (`test_phase2b_workflow_safety.py`):
 | Verification Scenario | Scenario Description & Clinical Safety Guarantee | Test Function | Outcome |
@@ -539,6 +540,39 @@ Phase 2B Verification Matrix (`test_phase2b_workflow_safety.py`):
 | **Prompt Injection Neutralization** | Delimiter breakout and prompt injection strings in retrieved documents are sanitized | `test_prompt_injection_sanitization_in_documents` | ✅ Pass |
 | **Source Provenance Formatting** | Document metadata (title, URL) cited only when verified provenance exists | `test_source_provenance_formatting` | ✅ Pass |
 | **Failed Generation Non-Persistence** | Provider exhaustion returns `success=False` and skips persisting failed assistant responses to database | `test_failed_generation_not_persisted_as_successful` | ✅ Pass |
+
+Phase 2B.1 Verification Matrix (`test_phase2b1_corrections.py`):
+| Verification Scenario | Scenario Description & Clinical Safety Guarantee | Test Function | Outcome |
+|---|---|---|---|
+| **Consultation Deadline Timeout** | Workflow execution bounded by `CONSULTATION_TIMEOUT_SECONDS`; `asyncio.wait_for` fires `TimeoutError` without blocking event loop | `test_consultation_timeout_returns_provider_timeout_state` | ✅ Pass |
+| **Guaranteed Lock Release on Timeout** | `ConversationLockManager` context manager guarantees per-conversation lock release upon `TimeoutError` or cancellation | `test_lock_released_after_timeout` | ✅ Pass |
+| **Result-State Taxonomy Constants** | Standard internal result states (`SUCCESSFUL_EDUCATIONAL`, `SUCCESSFUL_URGENT`, `PROVIDER_TIMEOUT`, `PROVIDER_UNAVAILABLE`, etc.) documented and defined | `test_result_state_taxonomy_constants` | ✅ Pass |
+| **Post-Exhaustion Call Prevention** | When `exhaustion_reason` is set, `ExecutorAgent` returns `source="Service Unavailable"` without attempting secondary LLM calls | `test_executor_terminates_on_exhaustion_reason` | ✅ Pass |
+| **Exhaustion Flag Propagation** | Provider exhaustion correctly propagates to `is_failed_generation=True` across state transitions | `test_executor_exhaustion_reason_propagates_to_failed_generation` | ✅ Pass |
+| **Routing Flags Exhaustion** | LangGraph conditional routing sets `exhaustion_reason` when all providers have been attempted and failed | `test_workflow_routing_sets_exhaustion_reason_after_all_providers` | ✅ Pass |
+| **Wikipedia Medical Allowlist** | Only allowlisted generic medical terms are extracted for Wikipedia queries; personal narratives and non-medical terms stripped | `test_wikipedia_query_extraction_allowlist_only` | ✅ Pass |
+| **Wikipedia Non-Medical Query Rejection** | Non-medical queries return `None` and completely decline external Wikipedia search | `test_wikipedia_rejects_non_medical_queries` | ✅ Pass |
+| **No Wikipedia Raw Fallback** | WikipediaAgent never retries with raw patient questions upon empty results | `test_wikipedia_no_raw_question_retry` | ✅ Pass |
+| **No Tavily Raw Fallback** | TavilyAgent never retries with raw patient narrative questions | `test_tavily_no_raw_question_fallback` | ✅ Pass |
+| **Tavily Medical Allowlist** | Tavily outbound queries contain exclusively allowlisted generic medical terms | `test_tavily_query_contains_only_medical_terms` | ✅ Pass |
+| **Triage Question Text Redaction** | Triage logging records question character length only; never logs patient question content or sensitive medical text | `test_triage_log_does_not_contain_question_text` | ✅ Pass |
+| **Emergency Advisory: India 112** | India 112 national emergency routing included prominently in non-crisis emergency advisories | `test_india_112_in_medical_emergency_advisory` | ✅ Pass |
+| **Crisis Advisory: India Helplines** | Crisis advisories include India mental health helplines (iCall, Vandrevala Foundation) and physical danger 112 | `test_india_crisis_advisory` | ✅ Pass |
+| **Safe Default for Unknown Locales** | Emergency advisory provides explicit guidance for users in unlisted countries to call local emergency services | `test_unknown_locale_safe_default_guidance` | ✅ Pass |
+| **No Country Inference from Symptoms** | Advisory presents multi-region reference information; does not infer patient nationality from symptom descriptions | `test_advisory_does_not_infer_country_from_symptoms` | ✅ Pass |
+| **No 100% Detection Claim** | Advisory explicitly acknowledges heuristic screening limitations and disclaims 100% emergency detection | `test_advisory_conservative_language_no_100_percent_claim` | ✅ Pass |
+| **Conservative Emergency Phrasing** | Advisory uses conservative language ("may be experiencing") to avoid misleading diagnostic assertions | `test_advisory_uses_may_be_not_definitive` | ✅ Pass |
+| **Citation Rejects javascript: URLs** | Citations drop `javascript:` schemes to prevent XSS attacks | `test_citation_rejects_javascript_url` | ✅ Pass |
+| **Citation Rejects data: URLs** | Citations drop `data:` schemes to prevent HTML/script injection | `test_citation_rejects_data_url` | ✅ Pass |
+| **Citation Rejects http: URLs** | Citations drop plain `http:` schemes, strictly enforcing HTTPS | `test_citation_rejects_http_url` | ✅ Pass |
+| **Citation Accepts Valid HTTPS** | Valid HTTPS URLs with legitimate hosts are formatted as citations | `test_citation_accepts_https_url` | ✅ Pass |
+| **Markdown Title Escaping** | Document titles have markdown link brackets and parentheses escaped to prevent citation breakout | `test_citation_escapes_markdown_in_title` | ✅ Pass |
+| **Empty Citation Handling** | Empty document lists yield empty citation strings | `test_citation_no_docs_returns_empty` | ✅ Pass |
+| **Title-Only Citation for URL-less Docs** | Documents with metadata title but no URL display clean title without empty markdown links | `test_citation_doc_without_url_shows_title_only` | ✅ Pass |
+| **Cardiac Heuristic Offline Verification** | Pure Python offline cardiac red-flag pattern matching verified | `test_urgent_care_cardiac_detected` | ✅ Pass |
+| **Crisis Heuristic Offline Verification** | Pure Python offline crisis/self-harm pattern matching verified | `test_urgent_care_crisis_detected` | ✅ Pass |
+| **Non-Emergency Passthrough** | Routine symptom descriptions do not trigger acute emergency screening | `test_urgent_care_normal_query_returns_none` | ✅ Pass |
+
 
 ---
 

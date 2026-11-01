@@ -92,13 +92,28 @@ def test_llm_agent_no_tool():
 # --- Wikipedia Agent Tests ---
 def test_wikipedia_agent():
     state = initialize_conversation_state()
-    state["question"] = "Flu"
+    # 'fever symptoms' contains allowlisted terms 'fever' and 'symptoms'
+    state["question"] = "fever symptoms"
     with patch('app.agents.wikipedia.get_wikipedia_wrapper') as mock_get:
         mock_wiki = MagicMock()
         mock_wiki.run.return_value = "Flu information is very important to know. " * 10
         mock_get.return_value = mock_wiki
         new_state = WikipediaAgent(state)
         assert new_state["wiki_success"] is True
+
+
+def test_wikipedia_agent_privacy_blocks_non_medical_query():
+    """Verify raw personal queries without allowlisted medical terms are NOT forwarded externally."""
+    state = initialize_conversation_state()
+    state["question"] = "I went to the park yesterday and my friend Bob was there"  # no medical terms
+    with patch('app.agents.wikipedia.get_wikipedia_wrapper') as mock_get:
+        mock_wiki = MagicMock()
+        mock_wiki.run.return_value = "Wikipedia content " * 100
+        mock_get.return_value = mock_wiki
+        new_state = WikipediaAgent(state)
+        # Should NOT search — no allowlisted medical terms extractable
+        assert new_state["wiki_success"] is False
+        mock_wiki.run.assert_not_called()
 
 
 def test_wikipedia_agent_no_tool():
@@ -110,6 +125,7 @@ def test_wikipedia_agent_no_tool():
 
 def test_wikipedia_agent_short_content():
     state = initialize_conversation_state()
+    state["question"] = "fever pain"
     with patch('app.agents.wikipedia.get_wikipedia_wrapper') as mock_get:
         mock_wiki = MagicMock()
         mock_wiki.run.return_value = "short"
@@ -121,14 +137,29 @@ def test_wikipedia_agent_short_content():
 # --- Tavily Agent Tests ---
 def test_tavily_agent():
     state = initialize_conversation_state()
-    state["question"] = "News"
+    # 'symptoms treatment' contains allowlisted medical terms
+    state["question"] = "symptoms treatment"
     with patch('app.agents.tavily.get_tavily_search') as mock_get:
         mock_tav = MagicMock()
         mock_tav.invoke.return_value = [
-            {"content": "News about medical discoveries is important. " * 5, "url": "http://news.com"}]
+            {"content": "Medical treatment information is important. " * 5, "url": "https://health.gov/article"}]
         mock_get.return_value = mock_tav
         new_state = TavilyAgent(state)
         assert new_state["tavily_success"] is True
+
+
+def test_tavily_agent_privacy_blocks_non_medical_query():
+    """Verify raw personal narratives without medical terms are NOT forwarded to Tavily."""
+    state = initialize_conversation_state()
+    state["question"] = "I need to buy some groceries"  # no medical terms
+    with patch('app.agents.tavily.get_tavily_search') as mock_get:
+        mock_tav = MagicMock()
+        mock_tav.invoke.return_value = [{"content": "Results " * 20, "url": "https://example.com"}]
+        mock_get.return_value = mock_tav
+        new_state = TavilyAgent(state)
+        # Should NOT search — no allowlisted medical terms extractable
+        assert new_state["tavily_success"] is False
+        mock_tav.invoke.assert_not_called()
 
 
 def test_tavily_agent_no_tool():

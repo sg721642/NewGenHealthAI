@@ -2,11 +2,21 @@
 NewGenHealthAI — services/chat_service.py
 ClinicalEngine: orchestrates the LangGraph agentic workflow for each chat message.
 Enforces multi-user clinical memory isolation, server-side conversation ownership,
-bounded per-conversation asyncio locking, state rehydration from persisted history,
-and clear/delete race guards.
+bounded per-conversation asyncio locking with guaranteed release, state rehydration
+from persisted history, and clear/delete race guards.
+
+Result-State Taxonomy (internal, not transmitted verbatim):
+  SUCCESSFUL_EDUCATIONAL   — provider returned a usable educational response
+  SUCCESSFUL_URGENT        — deterministic urgent-care advisory delivered
+  CLARIFICATION_QUESTION   — triage follow-up question returned
+  INCONCLUSIVE             — providers returned content insufficient for response
+  PROVIDER_UNAVAILABLE     — all configured providers offline / not configured
+  PROVIDER_TIMEOUT         — overall consultation deadline expired
+  INTERNAL_ERROR           — unexpected exception during workflow execution
 """
 
 import asyncio
+import os
 from collections import OrderedDict
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
@@ -14,6 +24,14 @@ from typing import Any, Dict, List, Optional, Set
 from app.core.logging_config import logger
 from app.core.state import AgentState, initialize_conversation_state, reset_query_state
 from app.services.database_service import db_service
+
+# ── Timeout Configuration ────────────────────────────────────────────────────
+# Overall per-consultation wall-clock deadline (seconds).
+# Individual provider HTTP timeouts are managed by the provider SDK layers.
+# Overridable via CONSULTATION_TIMEOUT_SECONDS env var.
+CONSULTATION_TIMEOUT_SECONDS: float = float(
+    os.getenv("CONSULTATION_TIMEOUT_SECONDS", "90")
+)
 
 
 class ConversationLockManager:
@@ -227,31 +245,58 @@ class ClinicalEngine:
             # 5. Persist user message under confirmed user ownership
             db_service.save_message(session_id, "user", message.strip(), user_id=user_id)
 
-            # 6. Run workflow
+            # 6. Run workflow with bounded wall-clock deadline
+            result: Dict[str, Any] = {}
+            _timeout = CONSULTATION_TIMEOUT_SECONDS
             try:
-                try:
+                async def _run_workflow() -> Dict[str, Any]:
                     if hasattr(self.workflow_app, "ainvoke"):
                         raw_res = self.workflow_app.ainvoke(state)
                         if hasattr(raw_res, "__await__"):
-                            result = await raw_res
-                        else:
-                            result = raw_res
-                    else:
-                        result = self.workflow_app.invoke(state)
+                            return await raw_res
+                        return raw_res
+                    return self.workflow_app.invoke(state)
+
+                try:
+                    result = await asyncio.wait_for(_run_workflow(), timeout=_timeout)
                 except AttributeError:
-                    logger.warning("Falling back to sync invoke")
+                    # Sync-only workflow fallback (LangGraph older versions)
+                    logger.warning("ClinicalEngine: falling back to sync invoke (session=%s)", session_id[:8])
                     result = self.workflow_app.invoke(state)
+
+            except asyncio.TimeoutError:
+                # Deadline expired — lock is released by _LockContext.__aexit__ automatically.
+                logger.warning(
+                    "ClinicalEngine: consultation deadline expired after %.0fs (session=%s, result_state=PROVIDER_TIMEOUT)",
+                    _timeout, session_id[:8],
+                )
+                # Return a timeout service-unavailable response; do not persist as successful clinical turn.
+                timeout_text = (
+                    "Our health information service took too long to respond. "
+                    "If you are experiencing concerning symptoms, please consult your "
+                    "healthcare provider, local clinic, or emergency services directly."
+                )
+                return {
+                    "response": timeout_text,
+                    "source": "Service Unavailable",
+                    "timestamp": datetime.now().strftime("%I:%M %p"),
+                    "success": False,
+                    "result_state": "PROVIDER_TIMEOUT",
+                }
             except Exception as e:
-                logger.error("Clinical workflow execution error: %s", e)
-                # Never fabricate a successful medical response on failure
+                # Redact exception message — may contain prompt content or credentials.
+                logger.error(
+                    "ClinicalEngine: workflow error (session=%s, result_state=INTERNAL_ERROR): %s",
+                    session_id[:8], type(e).__name__,
+                )
                 raise
 
             # 7. Post-invocation race check: verify conversation was not cleared or deleted during processing
             version_current = self._get_version(memory_key)
             if self._is_deleted(memory_key) or version_current != version_start:
                 logger.warning(
-                    "Conversation %s was cleared or deleted during processing (v%d -> v%d); discarding in-flight response",
-                    session_id[:8], version_start, version_current
+                    "ClinicalEngine: conversation cleared/deleted during processing (session=%s, v%d→v%d); discarding in-flight response",
+                    session_id[:8], version_start, version_current,
                 )
                 raise RuntimeError(f"Conversation {session_id} was cleared or deleted during processing")
 
@@ -261,7 +306,10 @@ class ClinicalEngine:
                 conv_after = db_service.get_or_create_conversation(session_id, user_id)
 
             if not conv_after:
-                logger.warning("Conversation %s was removed from database during processing; discarding response", session_id[:8])
+                logger.warning(
+                    "ClinicalEngine: conversation removed from DB during processing (session=%s); discarding response",
+                    session_id[:8],
+                )
                 raise RuntimeError(f"Conversation {session_id} no longer exists")
 
             # 8. Update in-memory state
@@ -278,29 +326,52 @@ class ClinicalEngine:
             )
             source = result.get("source", "Unknown")
 
+            # Determine result_state for consistent HTTP/DB/frontend alignment
+            if result.get("is_urgent"):
+                result_state = "SUCCESSFUL_URGENT"
+            elif result.get("triage_status") == "needs_info":
+                result_state = "CLARIFICATION_QUESTION"
+            elif is_failed and source == "Service Unavailable":
+                result_state = "PROVIDER_UNAVAILABLE"
+            elif is_failed:
+                result_state = "INCONCLUSIVE"
+            else:
+                result_state = "SUCCESSFUL_EDUCATIONAL"
+
             if not is_failed:
                 # Persist assistant response tagged with owner only on genuine success
                 db_service.save_message(session_id, "assistant", response_text, source, user_id=user_id)
                 success = True
+                logger.info(
+                    "ClinicalEngine: response persisted (session=%s, result_state=%s, source_category=%s)",
+                    session_id[:8], result_state, source,
+                )
             else:
                 # Do NOT persist service-unavailable or failed responses as valid clinical turns
-                logger.warning("ClinicalEngine: Generation flagged as failed/unavailable; skipping database persistence")
+                logger.warning(
+                    "ClinicalEngine: generation not persisted (session=%s, result_state=%s)",
+                    session_id[:8], result_state,
+                )
                 success = False
 
-            response_dict = {
+            response_dict: Dict[str, Any] = {
                 "response": response_text,
                 "source": source,
                 "timestamp": datetime.now().strftime("%I:%M %p"),
                 "success": success,
+                "result_state": result_state,
             }
 
             follow_up_data = result.get("follow_up_data")
             if follow_up_data and result.get("triage_status") == "needs_info":
                 response_dict["follow_up"] = follow_up_data
-                logger.info("Triage follow-up included in response (round %s)",
-                            follow_up_data.get("triage_round", "?"))
+                logger.info(
+                    "ClinicalEngine: triage follow-up included (session=%s, round=%s)",
+                    session_id[:8], follow_up_data.get("triage_round", "?"),
+                )
 
             return response_dict
+
 
     def clear_conversation(self, session_id: str, user_id: int) -> bool:
         """

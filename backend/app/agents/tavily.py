@@ -1,4 +1,16 @@
+"""
+NewGenHealthAI — agents/tavily.py
+TavilyAgent: web search fallback using Tavily.
+
+Privacy Rules:
+  1. External search is DISABLED unless TAVILY_API_KEY is configured.
+  2. Only allowlisted generic medical vocabulary is used to build the outbound
+     search query — personal symptom narratives are never forwarded.
+  3. If no recognised medical term can be extracted the agent declines to search.
+"""
+
 import re
+from typing import Optional
 
 from langchain_core.documents import Document
 
@@ -6,24 +18,62 @@ from app.core.logging_config import logger
 from app.core.state import AgentState
 from app.tools.tavily_search import get_tavily_search
 
+# ── Shared allowlisted medical term vocabulary (mirrors wikipedia.py) ─────────
+# Only terms from this set are forwarded to the external Tavily search API.
+_MEDICAL_TERM_ALLOWLIST = frozenset({
+    "heart", "cardiac", "cardiovascular", "lung", "pulmonary", "respiratory",
+    "brain", "neurological", "neurology", "liver", "hepatic", "kidney", "renal",
+    "stomach", "gastrointestinal", "intestinal", "bowel", "colon", "rectal",
+    "skin", "dermatology", "musculoskeletal", "bone", "joint", "muscle",
+    "blood", "hematology", "immune", "endocrine", "thyroid", "hormonal",
+    "fever", "pain", "headache", "fatigue", "nausea", "vomiting", "diarrhea",
+    "constipation", "cough", "dyspnea", "breathlessness", "palpitation",
+    "dizziness", "vertigo", "rash", "swelling", "edema", "inflammation",
+    "infection", "allergy", "anemia", "hypertension", "hypotension", "diabetes",
+    "obesity", "insomnia", "anxiety", "depression",
+    "asthma", "pneumonia", "bronchitis", "sinusitis", "migraine", "epilepsy",
+    "arthritis", "osteoporosis", "hypothyroidism", "hyperthyroidism", "gerd",
+    "ibs", "crohns", "colitis", "psoriasis", "eczema", "urticaria",
+    "stroke", "angina", "arrhythmia", "atherosclerosis",
+    "symptom", "symptoms", "diagnosis", "treatment", "medication", "therapy",
+    "prevention", "prognosis", "chronic", "acute", "benign", "malignant",
+    "cancer", "tumor", "autoimmune", "congenital", "genetic", "hereditary",
+    "virus", "bacteria", "fungal", "parasitic", "viral", "bacterial",
+    "vaccine", "antibiotic", "antiviral", "supplement", "vitamin", "mineral",
+    "nutrition", "exercise", "lifestyle", "diet",
+})
 
-def _build_safe_tavily_query(text: str) -> str:
-    """Extract safe generic search terms without leaking personal details or narrative."""
+_WORD_RE = re.compile(r"\b[A-Za-z]{3,}\b")
+
+
+def _build_privacy_preserving_query(text: str) -> Optional[str]:
+    """
+    Extract only allowlisted generic medical terms from user text.
+
+    Returns a sanitized query string suitable for external search, or None if
+    no recognised medical terms are present.  Never falls back to raw question text.
+    """
     if not text:
-        return "medical conditions and symptoms"
-    cleaned = re.sub(
-        r"\b(?:i\s+have|i\s+am|i\'?m|my|me|patient|he|she|his|her|we|our|the\s+patient\s+reported)\b",
-        "",
-        text,
-        flags=re.IGNORECASE,
-    )
-    words = [w for w in re.findall(r"\b[A-Za-z0-9_-]+\b", cleaned) if len(w) > 2]
-    safe_terms = " ".join(words[:6]) if words else "medical health"
-    return f"{safe_terms} health medical symptoms"
+        return None
+
+    matched_terms = []
+    seen: set = set()
+    for word in _WORD_RE.findall(text):
+        lower = word.lower()
+        if lower in _MEDICAL_TERM_ALLOWLIST and lower not in seen:
+            matched_terms.append(lower)
+            seen.add(lower)
+        if len(matched_terms) >= 5:
+            break
+
+    if not matched_terms:
+        return None
+
+    return " ".join(matched_terms) + " health information"
 
 
 def TavilyAgent(state: AgentState) -> AgentState:
-    """Search the web via Tavily for current medical research and news as a bounded fallback."""
+    """Search the web via Tavily for current medical research as a bounded privacy-preserving fallback."""
     attempted = list(state.get("attempted_providers", []))
     if "tavily" not in attempted:
         attempted.append("tavily")
@@ -32,15 +82,26 @@ def TavilyAgent(state: AgentState) -> AgentState:
 
     tavily = get_tavily_search()
     if not tavily:
+        # Tavily disabled (no API key configured) — skip external search silently.
+        logger.info("Tavily: search disabled (API key not configured or client unavailable)")
+        state["documents"] = []
+        state["tavily_success"] = False
+        return state
+
+    search_query = _build_privacy_preserving_query(state.get("question", ""))
+
+    if not search_query:
+        # No generic medical terms extractable — do not forward query externally.
+        logger.info("Tavily: no allowlisted medical terms found; skipping external search")
         state["documents"] = []
         state["tavily_success"] = False
         return state
 
     try:
-        search_query = _build_safe_tavily_query(state.get("question", ""))
         results = tavily.invoke(search_query)
     except Exception as e:
-        logger.error("Tavily: Search failed: %s", str(e))
+        # Redact exception — may echo query or contain credential fragments.
+        logger.error("Tavily: search failed (%s)", type(e).__name__)
         results = []
 
     valid_results = [
@@ -59,10 +120,10 @@ def TavilyAgent(state: AgentState) -> AgentState:
         ]
         state["tavily_success"] = True
         state["source"] = "Current Medical Research & News"
-        logger.info("Tavily: Found %d results", len(valid_results))
+        logger.info("Tavily: retrieved %d results (query_terms=%d)", len(valid_results), len(search_query.split()))
     else:
         state["documents"] = []
         state["tavily_success"] = False
-        logger.info("Tavily: No valid results")
+        logger.info("Tavily: no valid results for sanitized query")
 
     return state
