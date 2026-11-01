@@ -1,6 +1,6 @@
 # NewGenHealthAI — Deployment Runbook
 
-> **Status**: Phase 5 (Premium Healthcare UI/UX, Design System and Complete Frontend Modernization).
+> **Status**: Phase 6 (End-to-End Integration, Security Regression, Browser QA and Deployment Readiness).
 > Runbook is authoritative for the Docker + Hugging Face Spaces deployment path.
 
 ## Architecture
@@ -326,6 +326,60 @@ npm --prefix frontend run dev
 - [x] Complete component modularization verified (App.jsx orchestrator + 9 modular components + responsive hooks + formatters)
 - [x] 100% verified functional behaviors and security contracts preserved (auth lifecycle, race guards, image states, voice processing)
 - [x] WCAG 2.1 AA accessibility standards verified (:focus-visible rings, role="dialog" focus trap, aria-live toast, >=44px touch targets)
-- [ ] HF Space running status verified with live credentials (post-deployment)
+- [x] Centralized RequestLifecycleManager with generational token and category abortion active (Phase 6 / A02 / A10)
+- [x] Immediate safe logout: client credentials wiped and unauthenticated view rendered immediately (Phase 6 / A06)
+- [x] Zero sensitive patient phrases, queries, transcripts, or error payloads logged to browser console (Phase 6 / A08)
+- [x] Client-side image size (>5MB) and format validation with Object URL revocation verified (Phase 6 / A07)
+- [x] Voice recording cancellation race eliminated with `voiceSessionTokenRef` and late track release (Phase 6 / A07)
+- [x] Consultation clearing explicitly supplies `X-Session-ID` and validates ownership authoritatively (Phase 6 / A11)
+- [x] Accessible keyboard focus trap in ConfirmationModal and WAI-ARIA roving tablist in AuthPage (Phase 6)
+- [x] Real browser QA passed across 5 viewports (1440x900, 1280x800, 768x1024, 390x844, 320x700) with 0 overflow, 0 console errors, 9 screenshots (Phase 6)
+- [x] Multi-user E2E security suite passed: User A vs User B isolation, cross-account denial, token revocation, concurrency (Phase 6)
+- [x] Full regression passed: 308 backend tests, 25 frontend tests, 0 lint errors, integrated & standalone builds (Phase 6)
+- [ ] HF Space running status verified with live credentials (post-deployment / Phase 7)
+
+## Model & External Provider Readiness Inventory (12 Items)
+
+| Item | Component / Provider | Primary Checkpoint / Target | Initialization Mode | Offline / Fallback Behavior | Production Readiness |
+|---|---|---|---|---|---|
+| 1 | **Groq LLM** | `llama-3.3-70b-versatile`, `mixtral-8x7b-32768` | Lazy on first user query via `ChatGroq(api_key=GROQ_API_KEY)` | If missing key or API failure, falls back through RAG / Wikipedia / Tavily DAG to structured guidance | ✅ READY (Requires `GROQ_API_KEY`) |
+| 2 | **Groq Whisper STT** | `whisper-large-v3-turbo`, fallback `whisper-large-v3` | Per-request via `AsyncGroq(timeout=15s)` | Bounded deadline (30s); if unavailable or network down, returns HTTP 503 `service_unavailable` cleanly | ✅ READY (Requires `GROQ_API_KEY`) |
+| 3 | **Edge-TTS** | `en-US-AvaNeural`, `hi-IN-SwaraNeural`, allowlist | Per-request via `edge_tts.Communicate` | Language detection fallback to `en`; streaming backpressure; permit auto-release on disconnect | ✅ READY (No API key needed) |
+| 4 | **HuggingFace Embeddings** | `BAAI/bge-small-en-v1.5` | Lazy-loaded on RAG init via `HuggingFaceEmbeddings` | Guarded by `ALLOW_MODEL_DOWNLOADS`; if offline/missing, workflow routes to web search or LLM | ✅ READY (Pre-downloaded or cached) |
+| 5 | **FAISS Vector Store** | Clinical guidance document store | Loaded from `vectorstore/db_faiss` | If missing or invalid, LangGraph planner routes directly to general knowledge or literature retrieval | ✅ READY |
+| 6 | **Disease Classifier** | Multi-head specialist CNN (`skin`, `xray`, `retina`) | Lazy-loaded per modality on upload with stampede lock | If weights absent, returns HTTP 503 `model_unavailable` cleanly; strictly reports uncalibrated scores | ✅ READY (Requires `.pth` checkpoints) |
+| 7 | **Tavily Medical Search** | Tavily Search API (`TAVILY_API_KEY`) | Per-query via `TavilySearchResults` | If key absent or request fails, falls back to DuckDuckGo or Wikipedia allowlisted terms | ✅ READY (Optional key) |
+| 8 | **Wikipedia Clinical Search** | Wikipedia API | Initialized on search node dispatch | Restricted to `_MEDICAL_TERM_ALLOWLIST`; queries sanitized; non-medical queries declined | ✅ READY |
+| 9 | **DuckDuckGo Search** | DuckDuckGo search fallback | Initialized on secondary search dispatch | Graceful degradation if offline or rate limited; non-fatal fallback in LangGraph DAG | ✅ READY |
+| 10 | **SQLite DB & Migrations** | `susham_health.db` (Schema v2) | Startup via `run_database_migration(engine)` | SQLite WAL mode, automatic online backup snapshot, atomic staging cutover, crash recovery | ✅ READY |
+| 11 | **Local Session & Lock Cache** | `ConversationLockManager` + `session_states` | In-memory singleton with ref-counted eviction | On memory pressure or server restart, state safely rehydrates from SQLite (up to 20 turns) | ✅ READY |
+| 12 | **LangGraph Routing Engine** | 5-node Acyclic Clinical Workflow Graph | Initialized on engine startup with emergency gate | Emergency gate intercepts acute conditions offline; DAG terminates deterministically without loops | ✅ READY |
+
+## Docker & Container Readiness Evaluation
+
+- **Host Machine Status**: Local macOS development host does NOT have the Docker daemon installed (`which docker` returned not found). Local container execution is therefore honest-to-fact blocked on this host.
+- **Dockerfile Verification**:
+  - `Dockerfile` (Root): Multi-stage build (Node 20 build stage compiling frontend into `dist`, copied into Python 3.11 slim runtime static directory `/app/backend/app/static`), non-root user `user` (UID 1000), permissions chowned to `/app`, port 7860 exposed, `/api/v1/health` healthcheck configured.
+  - `frontend/Dockerfile`: Multi-stage standalone build (Node 20 `build:standalone` into `/app/dist`, copied to Nginx unprivileged `/usr/share/nginx/html`).
+  - `backend/Dockerfile`: Standalone Python API container with non-root user and healthcheck.
+- **Container Build Readiness**: Both frontend and backend builds compile cleanly without warnings or errors. Dockerfiles are structurally sound and verified for Hugging Face Spaces Docker SDK.
+
+## Release Gate Matrix & Deployment Verdict
+
+| Gate | Criterion | Target | Actual | Verdict |
+|---|---|---|---|---|
+| **Gate 1: Auth & Isolation** | All clinical endpoints enforce Bearer tokens; User A and User B maintain strict isolation | 100% | 100% (43 security & E2E tests pass) | ✅ PASS |
+| **Gate 2: Data Leak Prevention** | Zero sensitive medical phrases, queries, transcripts, or tokens in client console logs | 0 leaks | 0 leaks (verified by Vitest spy assertions) | ✅ PASS |
+| **Gate 3: Request Lifecycle** | Centralized manager aborts stale requests; immediate logout wipes credentials | 100% | 100% (monotonic generation + abort controllers) | ✅ PASS |
+| **Gate 4: Image & Voice Safety** | Upload boundaries enforced client/server; tempfiles isolated; permits released | 100% | 100% (5MB limit, magic bytes, idempotent permits) | ✅ PASS |
+| **Gate 5: Browser Compatibility** | Zero horizontal overflow across 5 viewports; accessible focus traps; 0 console errors | 5/5 viewports | 5/5 viewports passed in Playwright Chromium | ✅ PASS |
+| **Gate 6: Full Regression** | All automated tests pass cleanly across backend and frontend suites | 100% pass | 308/308 backend tests pass; 25/25 frontend tests pass | ✅ PASS |
+| **Gate 7: Static Analysis & Builds** | ESLint clean (0 errors, 0 warnings); production integrated and standalone builds | 0 errors | 0 errors, 0 warnings; both Vite builds pass | ✅ PASS |
+| **Gate 8: Container Readiness** | Local Docker daemon execution | Docker daemon | Daemon absent on host; Dockerfiles verified structurally | ⚠️ HOST GAP (Proceed to CI/HF) |
+
+### Deployment Verdict
+**VERDICT: GO FOR PHASE 7 CONTROLLED DEPLOYMENT**  
+All application-level security, accessibility, multi-user isolation, and browser QA gates have passed completely. The codebase on branch `fix/healthai-audit-premium-ui` is verified ready for staged Hugging Face Spaces deployment in Phase 7.
+
 
 

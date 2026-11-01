@@ -83,10 +83,8 @@ export default function MessageBubble({ msg, onFollowUpClick }) {
       };
 
       await audio.play();
-    } catch (err) {
-      if (err.name !== 'AbortError') {
-        console.error('[Voice] TTS playback error:', err);
-      }
+    } catch {
+      // Clean up on TTS error or cancellation without leaking error objects to console
       setIsSpeaking(false);
       if (blobUrlRef.current) {
         URL.revokeObjectURL(blobUrlRef.current);

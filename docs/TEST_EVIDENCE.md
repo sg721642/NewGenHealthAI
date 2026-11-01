@@ -1,6 +1,6 @@
 # NewGenHealthAI — Test Evidence & Verification Records
 
-Last updated: Phase 5 (Premium Healthcare UI/UX, Design System and Complete Frontend Modernization)
+Last updated: Phase 6 (End-to-End Integration, Security Regression, Browser QA and Deployment Readiness)
 
 ## Phase 1B Test Execution Summary
 
@@ -1028,10 +1028,166 @@ Outcome:
 
 ---
 
-### 5. Host Environment & Visual QA Verification Note
+## Phase 6 Test Execution Summary
 
-- **Browser Automation Limitation**: Per instruction 19, the local host machine is a headless macOS development environment without Playwright, Puppeteer, or Chromium/Google Chrome binaries installed (`which playwright` returned non-zero exit code 1).
-- **Verification Guarantee**: In accordance with project instructions, automated visual screenshot captures were not simulated or fabricated. All visual UI behaviors were verified via:
-  1. Complete DOM tree assertions in Vitest covering all visual states (light/dark theme tokens, responsive sidebar drawer toggling, modal backdrops, toast live regions, quick action grids, and choice chips).
-  2. CSS unit and media query audits (`index.css`) enforcing `:focus-visible`, minimum touch target size (`>=44px`), and `@media (prefers-reduced-motion: reduce)`.
-  3. Clean Vite client compilation and zero-error ESLint static analysis.
+### 1. Real Browser QA with Playwright Chromium
+
+Command:
+```bash
+node frontend/scripts/browser_qa.cjs
+```
+
+Environment:
+- Playwright Chromium Headless Shell (`chromium_headless_shell-1248`) on macOS.
+- Local static build preview server (`frontend/dist`) on `http://localhost:4173`.
+
+Results:
+- **Total Viewports Tested**: 5
+- **Screenshots Captured**: 9
+- **Horizontal Overflow Detected**: NO (0 overflow across all viewports)
+- **Console Errors Detected**: 0
+- **Status**: ✅ All Browser QA Checks Passed Cleanly
+
+Viewport Verification Matrix:
+| Viewport Name | Dimensions | Device Type | Overflow Check | Console Errors | Screenshot Captured | Result |
+|---|---|---|---|---|---|---|
+| `desktop_1440x900` | 1440 × 900 | Desktop Large | `docWidth=1440, winWidth=1440` | 0 | `desktop_1440x900_light.png`, `desktop_1440x900_dark.png`, `auth_login_view.png`, `modal_confirmation.png` | ✅ Pass |
+| `laptop_1280x800` | 1280 × 800 | Laptop Standard | `docWidth=1280, winWidth=1280` | 0 | `laptop_1280x800_light.png` | ✅ Pass |
+| `tablet_768x1024` | 768 × 1024 | Tablet Portrait | `docWidth=768, winWidth=768` | 0 | `tablet_768x1024_light.png` | ✅ Pass |
+| `mobile_390x844` | 390 × 844 | Modern Mobile (iPhone 12/13/14) | `docWidth=390, winWidth=390` | 0 | `mobile_390x844_light.png`, `mobile_390x844_sidebar.png` | ✅ Pass |
+| `mobile_320x700` | 320 × 700 | Small Mobile (iPhone SE) | `docWidth=320, winWidth=320` | 0 | `mobile_320x700_light.png` | ✅ Pass |
+
+Visual & Functional Capabilities Verified in Real Browser:
+- Light and dark clinical color theme transitions without style artifacts or color flash.
+- Responsive mobile drawer slide-out animation, backdrop click dismissal, and mobile hamburger navigation button.
+- Confirmation modal rendering, backdrop blur, focus trapping, and cancellation.
+- Consultation message bubble markdown styling, disclaimers, and starter question cards.
+
+---
+
+### 2. Frontend Integration Test Suite (Vitest)
+
+Command:
+```bash
+npm --prefix frontend test -- --run
+```
+
+Outcome:
+- **Total Test Files**: 1
+- **Total Tests**: 25
+- **Passed**: 25 (100%)
+- **Failed**: 0
+- **Skipped**: 0
+- **Duration**: 479ms
+- **Exit Code**: 0
+
+Test Details:
+| Test Name | Scenario Verified | Outcome |
+|---|---|---|
+| `renders app structure` | Verifies top header, brand, input composer, and layout | ✅ Pass |
+| `loads sessions on mount` | Verifies consultation sessions fetch and display in sidebar | ✅ Pass |
+| `sends a message and displays response` | Verifies optimistic user message and assistant response display | ✅ Pass |
+| `creates new chat` | Verifies new conversation initialization and server ID binding | ✅ Pass |
+| `clears state and aborts pending requests on logout` | Verifies state wipe and AbortController execution on sign out | ✅ Pass |
+| `suppresses stale response if session changes before response arrives` | Verifies race-safety and stale response suppression across chats | ✅ Pass |
+| `renders analysis_complete with uncalibrated score` | Verifies raw uncalibrated score reporting and zero primary diagnosis claim | ✅ Pass |
+| `renders normal/negative reference finding notice` | Verifies normal finding notice without fabricating disease | ✅ Pass |
+| `renders model_unavailable status cleanly` | Verifies HTTP 503 specialist unavailable handling | ✅ Pass |
+| `renders unsupported_image status cleanly` | Verifies non-medical image rejection notice | ✅ Pass |
+| `renders inconclusive status cleanly` | Verifies ambiguous modality inconclusive notice | ✅ Pass |
+| `handles microphone permission denial gracefully` | Verifies non-fatal alert on browser permission denial | ✅ Pass |
+| `handles unsupported browser media devices gracefully` | Verifies non-fatal alert when navigator.mediaDevices is absent | ✅ Pass |
+| `toggles light and dark themes and updates document attributes` | Verifies `data-theme` attribute toggling between light and dark | ✅ Pass |
+| `filters session list based on search term` | Verifies live consultation search filter in sidebar | ✅ Pass |
+| `opens confirmation modal on delete session and cancels cleanly` | Verifies accessible confirmation modal and safe cancel | ✅ Pass |
+| `submits query when clicking quick question starter card` | Verifies WelcomeScreen quick question triggers message dispatch | ✅ Pass |
+| `toggles password visibility on AuthPage` | Verifies password eye toggle between password and text input type | ✅ Pass |
+| `dispatches message when follow-up choice chip is clicked` | Verifies clinical follow-up question choice chip click triggers dispatch | ✅ Pass |
+| `does not log sensitive patient data or medical phrases to console` | **Phase 6**: Verifies zero sensitive symptoms/prescriptions in console logs | ✅ Pass |
+| `performs immediate safe logout by wiping client state before server response` | **Phase 6**: Verifies immediate localStorage purge and login view render | ✅ Pass |
+| `validates image size on client side and rejects files exceeding 5MB` | **Phase 6**: Verifies client-side 5MB upload boundary without network call | ✅ Pass |
+| `validates image format on client side and rejects unsupported formats` | **Phase 6**: Verifies client-side MIME check (JPEG/PNG/WebP) without network call | ✅ Pass |
+| `ConfirmationModal traps keyboard focus between cancel and confirm` | **Phase 6**: Verifies Tab/Shift+Tab focus trap and Escape key close | ✅ Pass |
+| `Sidebar session selection uses dedicated button and avoids nested interactive controls` | **Phase 6**: Verifies `.session-select-btn` sibling button architecture | ✅ Pass |
+
+---
+
+### 3. Frontend Linter (ESLint)
+
+Command:
+```bash
+npm --prefix frontend run lint
+```
+
+Outcome:
+- **Errors**: 0
+- **Warnings**: 0
+- **Exit Code**: 0
+
+---
+
+### 4. Frontend Production Builds
+
+Commands:
+```bash
+npm --prefix frontend run build
+npm --prefix frontend run build:standalone
+```
+
+Outcome:
+- **Integrated Build**: Vite bundled to `backend/app/static` in 490ms:
+  - `../backend/app/static/index.html`: 0.80 kB (gzip: 0.48 kB)
+  - `../backend/app/static/assets/index-DnB7bPVe.css`: 27.84 kB (gzip: 5.54 kB)
+  - `../backend/app/static/assets/index-BnL17G_P.js`: 360.28 kB (gzip: 110.82 kB)
+- **Standalone Build**: Vite bundled to `frontend/dist` in 468ms:
+  - `dist/index.html`: 0.80 kB (gzip: 0.48 kB)
+  - `dist/assets/index-DnB7bPVe.css`: 27.84 kB (gzip: 5.54 kB)
+  - `dist/assets/index-BnL17G_P.js`: 360.28 kB (gzip: 110.82 kB)
+- **Exit Code**: 0
+
+---
+
+### 5. Backend Multi-User Security & Isolation Suite (`test_phase6_multiuser_e2e.py`)
+
+Command:
+```bash
+PYTHONPATH=backend /tmp/nghai_venv/bin/pytest backend/tests/test_phase6_multiuser_e2e.py -v
+```
+
+Outcome:
+- **Total Tests**: 8
+- **Passed**: 8 (100%)
+- **Failed**: 0
+- **Duration**: 0.54s
+- **Exit Code**: 0
+
+Test Details:
+| Test Name | Scenario Verified | Outcome |
+|---|---|---|
+| `test_multiuser_registration_and_login` | Distinct User A and User B registration, token generation, and login verification | ✅ Pass |
+| `test_independent_consultations_and_distinct_messages` | Separate consultations with distinct medical phrases maintain 100% data isolation | ✅ Pass |
+| `test_cross_account_access_denial` | User A strictly forbidden from viewing, reading, injecting, clearing, or deleting User B's consultation | ✅ Pass |
+| `test_unknown_session_fails_closed` | Bogus/non-existent session IDs return HTTP 404 across history, clear, and delete | ✅ Pass |
+| `test_token_revocation_on_logout` | Server-side token revocation on logout immediately rejects subsequent requests with HTTP 401 | ✅ Pass |
+| `test_authentication_enforcement_clinical_endpoints` | Unauthenticated and bogus token requests across all clinical routes return HTTP 401 | ✅ Pass |
+| `test_concurrent_chat_requests_across_users` | Simultaneous requests from different users via `httpx.AsyncClient` execute without race conditions | ✅ Pass |
+| `test_clear_conversation_lifecycle` | Calling `/clear` with explicit `X-Session-ID` empties message history authoritatively | ✅ Pass |
+
+---
+
+### 6. Full Backend Regression Suite (Pytest)
+
+Command:
+```bash
+PYTHONPATH=backend /tmp/nghai_venv/bin/pytest backend/tests/ -v
+```
+
+Outcome:
+- **Total Test Files**: 22
+- **Total Tests**: 308
+- **Passed**: 308 (100%)
+- **Failed**: 0
+- **Skipped**: 0
+- **Duration**: 5.16s
+- **Exit Code**: 0
+

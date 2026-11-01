@@ -11,9 +11,14 @@ export default function ConfirmationModal({
   onCancel,
 }) {
   const cancelBtnRef = useRef(null);
+  const confirmBtnRef = useRef(null);
+  const prevActiveElementRef = useRef(null);
 
   useEffect(() => {
     if (!isOpen) return;
+
+    // Capture previous active element for focus restoration
+    prevActiveElementRef.current = document.activeElement;
 
     // Focus cancel button on open for safe default
     cancelBtnRef.current?.focus();
@@ -22,11 +27,35 @@ export default function ConfirmationModal({
       if (e.key === 'Escape') {
         e.stopPropagation();
         onCancel();
+      } else if (e.key === 'Tab') {
+        const cancelBtn = cancelBtnRef.current;
+        const confirmBtn = confirmBtnRef.current;
+        if (!cancelBtn || !confirmBtn) return;
+
+        if (e.shiftKey) {
+          if (document.activeElement === cancelBtn) {
+            e.preventDefault();
+            confirmBtn.focus();
+          }
+        } else {
+          if (document.activeElement === confirmBtn) {
+            e.preventDefault();
+            cancelBtn.focus();
+          }
+        }
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      // Restore focus on close
+      try {
+        prevActiveElementRef.current?.focus();
+      } catch {
+        /* ignore */
+      }
+    };
   }, [isOpen, onCancel]);
 
   if (!isOpen) return null;
@@ -37,6 +66,7 @@ export default function ConfirmationModal({
       role="dialog"
       aria-modal="true"
       aria-labelledby="modal-title"
+      aria-describedby="modal-desc"
       onClick={onCancel}
     >
       <div
@@ -49,7 +79,7 @@ export default function ConfirmationModal({
           </div>
           <div>
             <h3 id="modal-title" className="modal-title">{title}</h3>
-            <p className="modal-message">{message}</p>
+            <p id="modal-desc" className="modal-message">{message}</p>
           </div>
         </div>
 
@@ -63,6 +93,7 @@ export default function ConfirmationModal({
             {cancelText}
           </button>
           <button
+            ref={confirmBtnRef}
             type="button"
             className={`btn btn-${confirmVariant}`}
             onClick={onConfirm}

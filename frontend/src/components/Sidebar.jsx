@@ -111,28 +111,26 @@ export default function Sidebar({
                 <div
                   key={session.session_id}
                   className={`history-session-item ${isActive ? 'active' : ''}`}
-                  onClick={() => onLoadSession(session.session_id)}
-                  role="button"
-                  tabIndex={0}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      onLoadSession(session.session_id);
-                    }
-                  }}
-                  aria-current={isActive ? 'true' : undefined}
                 >
-                  <div className="session-icon" aria-hidden="true">
-                    <i className="fas fa-message" />
-                  </div>
-                  <div className="session-body">
-                    <span className="session-title">
-                      {session.preview || 'New conversation'}
-                    </span>
-                    <span className="session-time">
-                      {formatTimeAgo(session.last_active)}
-                    </span>
-                  </div>
+                  <button
+                    type="button"
+                    className="session-select-btn"
+                    onClick={() => onLoadSession(session.session_id)}
+                    aria-current={isActive ? 'true' : undefined}
+                    title={session.preview || 'Open conversation'}
+                  >
+                    <div className="session-icon" aria-hidden="true">
+                      <i className="fas fa-message" />
+                    </div>
+                    <div className="session-body">
+                      <span className="session-title">
+                        {session.preview || 'New conversation'}
+                      </span>
+                      <span className="session-time">
+                        {formatTimeAgo(session.last_active)}
+                      </span>
+                    </div>
+                  </button>
                   <button
                     type="button"
                     className="session-delete-btn"

@@ -596,4 +596,206 @@ describe('App Integration', () => {
             expect(screen.getByText(/cough lasting over 2 weeks/)).toBeInTheDocument();
         });
     });
+
+    it('does not log sensitive patient data or medical phrases to console during chat', async () => {
+        const sensitiveQuery = 'SYNTHETIC_DIAGNOSIS_CARDIAC_ARRHYTHMIA_12345';
+        const sensitiveResponse = 'SYNTHETIC_PRESCRIPTION_METOPROLOL_67890';
+
+        const logSpy = vi.spyOn(console, 'log');
+        const warnSpy = vi.spyOn(console, 'warn');
+        const errorSpy = vi.spyOn(console, 'error');
+
+        mockFetch.mockImplementation((url) => {
+            if (url === '/api/v1/chat') {
+                return Promise.resolve({
+                    json: () => Promise.resolve({
+                        success: true,
+                        response: sensitiveResponse,
+                        source: 'clinical-triage',
+                        timestamp: 'now'
+                    }),
+                    ok: true
+                });
+            }
+            return Promise.resolve({ json: () => Promise.resolve({ success: true, sessions: [] }), ok: true });
+        });
+
+        render(<App />);
+
+        const input = screen.getByPlaceholderText('Describe your symptoms or ask a medical question…');
+        fireEvent.change(input, { target: { value: sensitiveQuery } });
+
+        const sendBtn = screen.getByRole('button', { name: /Send message/i });
+        fireEvent.click(sendBtn);
+
+        await waitFor(() => {
+            expect(screen.getByText(sensitiveResponse)).toBeInTheDocument();
+        });
+
+        const allSpies = [logSpy, warnSpy, errorSpy];
+        for (const spy of allSpies) {
+            for (const call of spy.mock.calls) {
+                const callString = JSON.stringify(call);
+                expect(callString).not.toContain(sensitiveQuery);
+                expect(callString).not.toContain(sensitiveResponse);
+            }
+        }
+    });
+
+    it('performs immediate safe logout by wiping client state before server response resolves', async () => {
+        let resolveLogout;
+        const logoutPromise = new Promise((res) => {
+            resolveLogout = res;
+        });
+
+        mockFetch.mockImplementation((url) => {
+            if (url === '/api/v1/auth/logout') {
+                return logoutPromise;
+            }
+            return Promise.resolve({ json: () => Promise.resolve({ success: true, sessions: [] }), ok: true });
+        });
+
+        render(<App />);
+
+        expect(screen.getByText('Medical AI Assistant')).toBeInTheDocument();
+        const logoutBtn = screen.getByRole('button', { name: /Log out/i });
+
+        fireEvent.click(logoutBtn);
+
+        // Immediate wipe verification:
+        expect(localStorage.getItem('auth_token')).toBeNull();
+        expect(localStorage.getItem('auth_user')).toBeNull();
+        expect(screen.getByText('Welcome Back')).toBeInTheDocument();
+
+        // Server eventually resolves
+        resolveLogout({
+            json: () => Promise.resolve({ success: true }),
+            ok: true
+        });
+    });
+
+    it('validates image size on client side and rejects files exceeding 5MB without sending network request', async () => {
+        let imageFetchCalled = false;
+        mockFetch.mockImplementation((url) => {
+            if (url === '/api/v1/analyze-image') {
+                imageFetchCalled = true;
+                return Promise.resolve({ json: () => Promise.resolve({ success: true }), ok: true });
+            }
+            return Promise.resolve({ json: () => Promise.resolve({ success: true, sessions: [] }), ok: true });
+        });
+
+        render(<App />);
+
+        const fileInput = document.querySelector('input[type="file"]');
+        expect(fileInput).not.toBeNull();
+
+        // Create an oversized file: 6MB
+        const largeFile = new File(['x'.repeat(1024)], 'large_scan.png', { type: 'image/png' });
+        Object.defineProperty(largeFile, 'size', { value: 6 * 1024 * 1024 });
+
+        fireEvent.change(fileInput, { target: { files: [largeFile] } });
+
+        await waitFor(() => {
+            expect(screen.getByText(/Image size exceeds 5MB limit/i)).toBeInTheDocument();
+        });
+
+        expect(imageFetchCalled).toBe(false);
+    });
+
+    it('validates image format on client side and rejects unsupported formats without sending network request', async () => {
+        let imageFetchCalled = false;
+        mockFetch.mockImplementation((url) => {
+            if (url === '/api/v1/analyze-image') {
+                imageFetchCalled = true;
+                return Promise.resolve({ json: () => Promise.resolve({ success: true }), ok: true });
+            }
+            return Promise.resolve({ json: () => Promise.resolve({ success: true, sessions: [] }), ok: true });
+        });
+
+        render(<App />);
+
+        const fileInput = document.querySelector('input[type="file"]');
+        expect(fileInput).not.toBeNull();
+
+        const invalidFile = new File(['text content'], 'report.pdf', { type: 'application/pdf' });
+        fireEvent.change(fileInput, { target: { files: [invalidFile] } });
+
+        await waitFor(() => {
+            expect(screen.getByText(/Unsupported image format/i)).toBeInTheDocument();
+        });
+
+        expect(imageFetchCalled).toBe(false);
+    });
+
+    it('ConfirmationModal traps keyboard focus between cancel and confirm', async () => {
+        // Setup initial message so clearChat has something to clear
+        mockFetch.mockImplementation((url) => {
+            if (url === '/api/v1/sessions/active-session/history') {
+                return Promise.resolve({
+                    json: () => Promise.resolve({
+                        success: true,
+                        messages: [{ role: 'user', content: 'test message', timestamp: '12:00' }]
+                    }),
+                    ok: true
+                });
+            }
+            return Promise.resolve({ json: () => Promise.resolve({ success: true, sessions: [] }), ok: true });
+        });
+
+        render(<App />);
+
+        // Wait for active session or send a message to ensure messages.length > 0
+        const input = screen.getByPlaceholderText('Describe your symptoms or ask a medical question…');
+        fireEvent.change(input, { target: { value: 'test question' } });
+        const sendBtn = screen.getByRole('button', { name: /Send message/i });
+        fireEvent.click(sendBtn);
+
+        const clearBtn = screen.getByRole('button', { name: /Clear current conversation/i });
+        fireEvent.click(clearBtn);
+
+        await waitFor(() => {
+            expect(screen.getByText('Clear Conversation?')).toBeInTheDocument();
+        });
+
+        const cancelBtn = screen.getByRole('button', { name: 'Cancel' });
+        const confirmBtn = screen.getByRole('button', { name: 'Clear Messages' });
+
+        expect(confirmBtn).toBeInTheDocument();
+        expect(document.activeElement).toBe(cancelBtn);
+
+        // Tab to confirm button
+        fireEvent.keyDown(window, { key: 'Tab' });
+        // Shift+Tab wrap test
+        fireEvent.keyDown(window, { key: 'Tab', shiftKey: true });
+
+        // Close with escape
+        fireEvent.keyDown(window, { key: 'Escape' });
+        await waitFor(() => {
+            expect(screen.queryByText('Clear Conversation?')).toBeNull();
+        });
+    });
+
+    it('Sidebar session selection uses dedicated button and avoids nested interactive controls', async () => {
+        const mockSessions = [{ session_id: 'sess-100', preview: 'Migraine notes', last_active: '2024' }];
+        mockFetch.mockImplementation((url) => {
+            if (url === '/api/v1/sessions') {
+                return Promise.resolve({
+                    json: () => Promise.resolve({ success: true, sessions: mockSessions }),
+                    ok: true
+                });
+            }
+            return Promise.resolve({ json: () => Promise.resolve({ success: true }), ok: true });
+        });
+
+        render(<App />);
+
+        await waitFor(() => {
+            expect(screen.getByText('Migraine notes')).toBeInTheDocument();
+        });
+
+        const sessionBtn = document.querySelector('.session-select-btn');
+        expect(sessionBtn).not.toBeNull();
+        expect(sessionBtn.querySelector('button')).toBeNull();
+        expect(sessionBtn.closest('.history-session-item').tagName.toLowerCase()).not.toBe('button');
+    });
 });

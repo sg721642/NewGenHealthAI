@@ -556,6 +556,27 @@ a:hover {
   color: var(--text-main);
 }
 
+.session-select-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: none;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.session-select-btn:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
 .history-session-item.active {
   background-color: var(--bg-subtle);
   color: var(--primary);

@@ -19,6 +19,7 @@ export default function MessageComposer({
   const timerRef = useRef(null);
   const elapsedRef = useRef(0);
   const sttAbortRef = useRef(null);
+  const voiceSessionTokenRef = useRef(0);
 
   // Auto-resize textarea
   const handleInput = (e) => {
@@ -36,6 +37,9 @@ export default function MessageComposer({
 
   // Cleanup voice resources
   const cleanupVoiceResources = useCallback(() => {
+    voiceSessionTokenRef.current += 1;
+    audioChunksRef.current = [];
+
     if (timerRef.current) {
       clearInterval(timerRef.current);
       timerRef.current = null;
@@ -51,6 +55,7 @@ export default function MessageComposer({
         /* ignore */
       }
     }
+    mediaRecorderRef.current = null;
     if (streamRef.current) {
       try {
         streamRef.current.getTracks().forEach((track) => track.stop());
@@ -73,7 +78,9 @@ export default function MessageComposer({
   }, [currentSessionId, cleanupVoiceResources]);
 
   // Transcribe audio using backend Groq Whisper endpoint
-  const transcribeAudio = useCallback(async (audioBlob, ext) => {
+  const transcribeAudio = useCallback(async (audioBlob, ext, sessionToken) => {
+    if (voiceSessionTokenRef.current !== sessionToken) return;
+
     setVoiceState('transcribing');
     const abortCtrl = new AbortController();
     sttAbortRef.current = abortCtrl;
@@ -81,7 +88,6 @@ export default function MessageComposer({
     try {
       const formData = new FormData();
       formData.append('file', audioBlob, `recording${ext}`);
-      console.log('[Voice] Sending to STT:', audioBlob.size, 'bytes, ext:', ext);
 
       const token = localStorage.getItem('auth_token');
       const res = await fetch('/api/v1/voice/stt', {
@@ -91,8 +97,10 @@ export default function MessageComposer({
         signal: abortCtrl.signal,
       });
 
+      // Verify token hasn't changed while awaiting fetch
+      if (voiceSessionTokenRef.current !== sessionToken) return;
+
       const data = await res.json().catch(() => null);
-      console.log('[Voice] STT response status:', res.status, data);
 
       if (!res.ok) {
         const errorMsg = data?.detail || data?.error || `Voice transcription failed (${res.status})`;
@@ -115,7 +123,6 @@ export default function MessageComposer({
 
       if (data.text && data.text.trim()) {
         const transcribed = data.text.trim();
-        console.log('[Voice] Got text:', transcribed);
         setInputValue((prev) => {
           const sep = prev && prev.trim() ? ' ' : '';
           return prev + sep + transcribed;
@@ -124,37 +131,40 @@ export default function MessageComposer({
         alert('No speech detected. Speak clearly for at least 2 seconds.');
       }
     } catch (err) {
-      if (err.name === 'AbortError') {
-        console.log('[Voice] STT request cancelled');
-        return;
-      }
-      console.error('[Voice] Error:', err);
-      alert('Voice failed: ' + err.message);
+      if (err.name === 'AbortError') return;
+      alert('Voice failed: ' + (err.message || 'Network error'));
     } finally {
-      sttAbortRef.current = null;
-      setVoiceState('idle');
+      if (voiceSessionTokenRef.current === sessionToken) {
+        sttAbortRef.current = null;
+        setVoiceState('idle');
+      }
     }
   }, [setInputValue]);
 
   const stopRecording = useCallback(() => {
-    console.log('[Voice] Stopping recording...');
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop();
-    }
     if (timerRef.current) {
       clearInterval(timerRef.current);
       timerRef.current = null;
     }
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      try {
+        mediaRecorderRef.current.stop();
+      } catch {
+        /* ignore */
+      }
+    }
   }, []);
 
   const startRecording = useCallback(async () => {
-    console.log('[Voice] Starting recording...');
-    if (voiceState === 'transcribing') return;
+    if (voiceState !== 'idle') return;
 
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       alert('Microphone access is not supported by your browser.');
       return;
     }
+
+    voiceSessionTokenRef.current += 1;
+    const sessionToken = voiceSessionTokenRef.current;
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -165,7 +175,13 @@ export default function MessageComposer({
           autoGainControl: true,
         },
       });
-      console.log('[Voice] Got microphone stream');
+
+      // If user cancelled, switched session, or logged out while getUserMedia was resolving
+      if (voiceSessionTokenRef.current !== sessionToken) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+
       streamRef.current = stream;
       audioChunksRef.current = [];
 
@@ -182,6 +198,7 @@ export default function MessageComposer({
       const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
 
       recorder.ondataavailable = (e) => {
+        if (voiceSessionTokenRef.current !== sessionToken) return;
         if (e.data && e.data.size > 0) {
           audioChunksRef.current.push(e.data);
         }
@@ -193,17 +210,24 @@ export default function MessageComposer({
         const duration = elapsedRef.current;
         setRecordingTime(0);
 
+        // Check if recording was cancelled or cleaned up
+        if (voiceSessionTokenRef.current !== sessionToken) {
+          audioChunksRef.current = [];
+          setVoiceState('idle');
+          return;
+        }
+
         if (duration < 1) {
-          console.warn('[Voice] Too short (' + duration + 's), skipping');
+          audioChunksRef.current = [];
           setVoiceState('idle');
           return;
         }
 
         const mime = recorder.mimeType || 'audio/webm';
         const blob = new Blob(audioChunksRef.current, { type: mime });
+        audioChunksRef.current = [];
 
         if (blob.size < 500) {
-          console.warn('[Voice] Blob too small, skipping');
           setVoiceState('idle');
           return;
         }
@@ -214,7 +238,7 @@ export default function MessageComposer({
         else if (mime.includes('mpeg') || mime.includes('mp3')) ext = '.mp3';
         else if (mime.includes('wav')) ext = '.wav';
 
-        await transcribeAudio(blob, ext);
+        await transcribeAudio(blob, ext, sessionToken);
       };
 
       recorder.onerror = () => {
@@ -235,7 +259,6 @@ export default function MessageComposer({
         setRecordingTime(elapsedRef.current);
       }, 1000);
     } catch (err) {
-      console.error('[Voice] Mic access error:', err);
       setVoiceState('idle');
       if (err.name === 'NotAllowedError') {
         alert('Microphone access denied. Please allow microphone permission and try again.');
@@ -248,19 +271,14 @@ export default function MessageComposer({
   }, [voiceState, transcribeAudio]);
 
   const handleMicClick = useCallback(() => {
-    console.log('[Voice] Mic clicked, current state:', voiceState);
     if (voiceState === 'recording') {
       stopRecording();
     } else if (voiceState === 'idle') {
       startRecording();
     } else if (voiceState === 'transcribing') {
-      if (sttAbortRef.current) {
-        sttAbortRef.current.abort();
-        sttAbortRef.current = null;
-      }
-      setVoiceState('idle');
+      cleanupVoiceResources();
     }
-  }, [voiceState, stopRecording, startRecording]);
+  }, [voiceState, startRecording, stopRecording, cleanupVoiceResources]);
 
   const formatTimer = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 
 export default function AuthPage({ onAuthSuccess }) {
   const [tab, setTab] = useState('login'); // 'login' | 'register'
@@ -8,6 +8,16 @@ export default function AuthPage({ onAuthSuccess }) {
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
+  const timeoutRef = useRef(null);
+
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+        timeoutRef.current = null;
+      }
+    };
+  }, []);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -54,7 +64,7 @@ export default function AuthPage({ onAuthSuccess }) {
           JSON.stringify({ username: data.username, user_id: data.user_id })
         );
 
-        setTimeout(() => {
+        timeoutRef.current = setTimeout(() => {
           onAuthSuccess({ username: data.username, user_id: data.user_id }, data.token);
         }, 400);
       }
@@ -69,6 +79,13 @@ export default function AuthPage({ onAuthSuccess }) {
     setTab(newTab);
     setErrorMessage('');
     setSuccessMessage('');
+  };
+
+  const handleTabKeyDown = (e) => {
+    if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+      e.preventDefault();
+      handleTabChange(tab === 'login' ? 'register' : 'login');
+    }
   };
 
   return (
@@ -86,20 +103,28 @@ export default function AuthPage({ onAuthSuccess }) {
         {/* Tab Controls */}
         <div className="auth-tabs" role="tablist" aria-label="Authentication Options">
           <button
+            id="tab-login"
             type="button"
             role="tab"
             aria-selected={tab === 'login'}
+            aria-controls="auth-panel"
+            tabIndex={tab === 'login' ? 0 : -1}
             className={`auth-tab ${tab === 'login' ? 'active' : ''}`}
             onClick={() => handleTabChange('login')}
+            onKeyDown={handleTabKeyDown}
           >
             Sign In
           </button>
           <button
+            id="tab-register"
             type="button"
             role="tab"
             aria-selected={tab === 'register'}
+            aria-controls="auth-panel"
+            tabIndex={tab === 'register' ? 0 : -1}
             className={`auth-tab ${tab === 'register' ? 'active' : ''}`}
             onClick={() => handleTabChange('register')}
+            onKeyDown={handleTabKeyDown}
           >
             Register
           </button>
@@ -116,6 +141,8 @@ export default function AuthPage({ onAuthSuccess }) {
               : 'Sign up for private, isolated healthcare intake and clinical education.'}
           </p>
         </div>
+
+        <div id="auth-panel" role="tabpanel" aria-labelledby={tab === 'login' ? 'tab-login' : 'tab-register'}>
 
         {/* Form */}
         <form onSubmit={handleSubmit} className="auth-form" noValidate>
@@ -211,6 +238,7 @@ export default function AuthPage({ onAuthSuccess }) {
             )}
           </button>
         </form>
+        </div>
 
         {/* Clinical Transparency & Privacy Note */}
         <div className="auth-disclaimer">

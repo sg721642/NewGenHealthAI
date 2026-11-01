@@ -8,6 +8,7 @@ import Toast from './components/Toast';
 import AuthPage from './pages/AuthPage';
 import { useIsMobile } from './hooks/useIsMobile';
 import { buildDownloadText } from './utils/formatters';
+import { requestManager } from './utils/requestManager';
 import './index.css';
 
 const API_BASE = '/api/v1';
@@ -51,9 +52,9 @@ export default function App() {
   });
 
   // References for race safety and cancellation
-  const activeAbortRef = useRef(null);
   const currentSessionIdRef = useRef(null);
   const currentUserRef = useRef(user);
+  const createdObjectURLsRef = useRef(new Set());
   const chatAreaRef = useRef(null);
   const inputRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -61,11 +62,35 @@ export default function App() {
 
   useEffect(() => {
     currentUserRef.current = user;
+    if (user) {
+      requestManager.setCurrentUser(user.user_id || user.id);
+    }
   }, [user]);
 
   useEffect(() => {
     currentSessionIdRef.current = currentSessionId;
   }, [currentSessionId]);
+
+  // Clean up object URLs
+  const revokeAllObjectURLs = useCallback(() => {
+    createdObjectURLsRef.current.forEach((url) => {
+      try {
+        URL.revokeObjectURL(url);
+      } catch {
+        /* ignore */
+      }
+    });
+    createdObjectURLsRef.current.clear();
+  }, []);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      revokeAllObjectURLs();
+      requestManager.abortAll();
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    };
+  }, [revokeAllObjectURLs]);
 
   // Apply theme to document element
   useEffect(() => {
@@ -113,18 +138,13 @@ export default function App() {
     [authToken]
   );
 
-  // Abort pending requests
-  const abortPendingRequests = useCallback(() => {
-    if (activeAbortRef.current) {
-      activeAbortRef.current.abort();
-      activeAbortRef.current = null;
-    }
-  }, []);
+
 
   // Handle successful login or registration
   const handleAuthSuccess = useCallback(
     (userData, token) => {
-      abortPendingRequests();
+      requestManager.nextAuthGeneration(userData?.user_id || userData?.id);
+      revokeAllObjectURLs();
       setUser(userData);
       setAuthToken(token);
       setMessages([]);
@@ -133,25 +153,25 @@ export default function App() {
       setCurrentSessionId(null);
       currentSessionIdRef.current = null;
       setShowWelcome(true);
+      setIsTyping(false);
     },
-    [abortPendingRequests]
+    [revokeAllObjectURLs]
   );
 
-  // Handle Logout
-  const handleLogout = useCallback(async () => {
-    abortPendingRequests();
-    try {
-      if (authToken) {
-        await fetch(`${API_BASE}/auth/logout`, {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${authToken}` },
-        });
-      }
-    } catch {
-      /* silent */
-    }
+  // Handle Logout - Immediately Safe
+  const handleLogout = useCallback(() => {
+    // 1. Immediately invalidate auth generation & abort all in-flight requests
+    requestManager.nextAuthGeneration(null);
+
+    // 2. Immediately revoke object URLs to prevent memory leaks
+    revokeAllObjectURLs();
+
+    // 3. Immediately capture and remove credentials from localStorage
+    const tokenToRevoke = authToken || localStorage.getItem('auth_token');
     localStorage.removeItem('auth_token');
     localStorage.removeItem('auth_user');
+
+    // 4. Immediately clear all private UI state
     setUser(null);
     setAuthToken(null);
     setMessages([]);
@@ -160,26 +180,43 @@ export default function App() {
     setCurrentSessionId(null);
     currentSessionIdRef.current = null;
     setShowWelcome(true);
-  }, [authToken, abortPendingRequests]);
+    setIsTyping(false);
+
+    // 5. Fire server-side revocation in background (non-blocking, doesn't delay privacy wipe)
+    if (tokenToRevoke) {
+      fetch(`${API_BASE}/auth/logout`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${tokenToRevoke}` },
+      }).catch(() => {
+        /* silent - local state is already safely wiped */
+      });
+    }
+  }, [authToken, revokeAllObjectURLs]);
 
   // Verify token validity on initial mount
   useEffect(() => {
     if (!authToken) return;
-    let isMounted = true;
+    const request = requestManager.createRequest('auth', {
+      userId: user?.user_id || user?.id,
+    });
+
     fetch(`${API_BASE}/auth/me`, {
       headers: { Authorization: `Bearer ${authToken}` },
+      signal: request.signal,
     })
       .then((res) => {
         if (!res.ok) throw new Error('Session invalid');
         return res.json();
       })
       .then((data) => {
-        if (isMounted && data && data.username) {
+        if (request.isValid() && data && data.username) {
           setUser((prev) => prev || { username: data.username, user_id: data.user_id });
+          requestManager.setCurrentUser(data.user_id);
         }
       })
-      .catch(() => {
-        if (isMounted) {
+      .catch((err) => {
+        if (err?.name === 'AbortError') return;
+        if (request.isValid()) {
           localStorage.removeItem('auth_token');
           localStorage.removeItem('auth_user');
           setUser(null);
@@ -191,11 +228,15 @@ export default function App() {
           setShowWelcome(true);
           showToast('Session expired. Please log in again.', 'info');
         }
+      })
+      .finally(() => {
+        request.complete();
       });
+
     return () => {
-      isMounted = false;
+      request.abort();
     };
-  }, [authToken, showToast]);
+  }, [authToken, showToast, user]);
 
   // Auto-scroll chat area
   const scrollToBottom = useCallback(() => {
@@ -213,28 +254,51 @@ export default function App() {
 
   // Load consultations list
   const loadSessions = useCallback(async () => {
+    if (!authToken) return;
+    const request = requestManager.createRequest('sessions', {
+      userId: user?.user_id || user?.id,
+    });
+
     try {
-      const res = await fetch(`${API_BASE}/sessions`, { headers: authHeaders() });
+      const res = await fetch(`${API_BASE}/sessions`, {
+        headers: authHeaders(),
+        signal: request.signal,
+      });
+      if (!request.isValid()) return;
       const data = await res.json();
+      if (!request.isValid()) return;
+
       if (data.success && data.sessions) {
         setSessions(data.sessions);
       } else {
-        setSessions([]);
+        setSessions((prev) => prev || []);
       }
-    } catch {
-      setSessions([]);
+    } catch (err) {
+      if (err?.name === 'AbortError') return;
+      // Preserve existing valid sessions on transient failure
+      setSessions((prev) => prev || []);
+    } finally {
+      request.complete();
     }
-  }, [authHeaders]);
+  }, [authHeaders, authToken, user]);
 
   // Mount: load consultations and active history
   useEffect(() => {
-    if (!user) return;
+    if (!user || !authToken) return;
     loadSessions();
 
-    (async () => {
-      try {
-        const res = await fetch(`${API_BASE}/history`, { headers: authHeaders() });
-        const data = await res.json();
+    const request = requestManager.createRequest('history', {
+      userId: user?.user_id || user?.id,
+      sessionId: currentSessionId,
+    });
+
+    fetch(`${API_BASE}/history`, {
+      headers: authHeaders(),
+      signal: request.signal,
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (!request.isValid(currentSessionIdRef.current)) return;
         if (data.success && data.messages && data.messages.length > 0) {
           const msgs = data.messages.map((m) => ({
             type: m.role === 'user' ? 'user' : 'assistant',
@@ -246,20 +310,39 @@ export default function App() {
           setChatHistory(msgs.map((m) => ({ ...m })));
           setShowWelcome(false);
         }
-      } catch {
-        /* silent */
-      }
-    })();
-  }, [loadSessions, user, authHeaders]);
+      })
+      .catch((err) => {
+        if (err?.name === 'AbortError') return;
+      })
+      .finally(() => {
+        request.complete();
+      });
+
+    return () => {
+      request.abort();
+    };
+  }, [loadSessions, user, authToken, authHeaders, currentSessionId]);
 
   // Load specific consultation session
   const loadSession = useCallback(
     async (sessionId) => {
-      abortPendingRequests();
+      const targetUserId = user?.user_id || user?.id;
+      const request = requestManager.createRequest('history', {
+        userId: targetUserId,
+        sessionId,
+      });
+
       try {
-        const res = await fetch(`${API_BASE}/session/${sessionId}`, { headers: authHeaders() });
+        const res = await fetch(`${API_BASE}/session/${sessionId}`, {
+          headers: authHeaders(),
+          signal: request.signal,
+        });
+        if (!request.isValid()) return;
         const data = await res.json();
+        if (!request.isValid()) return;
+
         if (data.success) {
+          revokeAllObjectURLs();
           setCurrentSessionId(sessionId);
           currentSessionIdRef.current = sessionId;
           const msgs = (data.messages || []).map((m) => ({
@@ -274,20 +357,36 @@ export default function App() {
           showToast('Consultation loaded', 'success');
           if (isMobile) setSidebarOpen(false);
         }
-      } catch {
-        showToast('Failed to load consultation', 'error');
+      } catch (err) {
+        if (err?.name === 'AbortError') return;
+        if (request.isValid()) {
+          showToast('Failed to load consultation', 'error');
+        }
+      } finally {
+        request.complete();
       }
     },
-    [showToast, authHeaders, abortPendingRequests, isMobile]
+    [showToast, authHeaders, isMobile, user, revokeAllObjectURLs]
   );
 
   // Create new consultation
   const createNewChat = useCallback(async () => {
-    abortPendingRequests();
+    const targetUserId = user?.user_id || user?.id;
+    const request = requestManager.createRequest('chat', {
+      userId: targetUserId,
+    });
+
     try {
-      const res = await fetch(`${API_BASE}/new-chat`, { method: 'POST', headers: authHeaders() });
+      const res = await fetch(`${API_BASE}/new-chat`, {
+        method: 'POST',
+        headers: authHeaders(),
+        signal: request.signal,
+      });
+      if (!request.isValid()) return;
       if (res.ok) {
         const data = await res.json();
+        if (!request.isValid()) return;
+        revokeAllObjectURLs();
         setMessages([]);
         setChatHistory([]);
         setCurrentSessionId(data.session_id || null);
@@ -297,10 +396,15 @@ export default function App() {
         showToast('New conversation started', 'success');
         if (isMobile) setSidebarOpen(false);
       }
-    } catch {
-      showToast('Failed to create consultation', 'error');
+    } catch (err) {
+      if (err?.name === 'AbortError') return;
+      if (request.isValid()) {
+        showToast('Failed to create consultation', 'error');
+      }
+    } finally {
+      request.complete();
     }
-  }, [authHeaders, loadSessions, showToast, abortPendingRequests, isMobile]);
+  }, [authHeaders, loadSessions, showToast, isMobile, user, revokeAllObjectURLs]);
 
   // Delete consultation with confirmation
   const deleteSession = useCallback(
@@ -313,7 +417,11 @@ export default function App() {
         confirmVariant: 'danger',
         onConfirm: async () => {
           setConfirmModal((prev) => ({ ...prev, isOpen: false }));
-          if (currentSessionIdRef.current === sessionId) abortPendingRequests();
+          if (currentSessionIdRef.current === sessionId) {
+            requestManager.abortCategory('chat');
+            requestManager.abortCategory('image');
+            revokeAllObjectURLs();
+          }
           try {
             const res = await fetch(`${API_BASE}/session/${sessionId}`, {
               method: 'DELETE',
@@ -321,7 +429,9 @@ export default function App() {
             });
             if (res.ok) {
               await loadSessions();
-              if (currentSessionIdRef.current === sessionId) createNewChat();
+              if (currentSessionIdRef.current === sessionId) {
+                createNewChat();
+              }
               showToast('Conversation deleted', 'success');
             }
           } catch {
@@ -330,11 +440,17 @@ export default function App() {
         },
       });
     },
-    [loadSessions, showToast, authHeaders, abortPendingRequests, createNewChat]
+    [loadSessions, showToast, authHeaders, createNewChat, revokeAllObjectURLs]
   );
 
   // Clear current conversation
   const clearChat = useCallback(() => {
+    const targetSessionId = currentSessionIdRef.current;
+    if (!targetSessionId && messages.length === 0) {
+      showToast('No active conversation to clear', 'info');
+      return;
+    }
+
     setConfirmModal({
       isOpen: true,
       title: 'Clear Conversation?',
@@ -343,21 +459,33 @@ export default function App() {
       confirmVariant: 'danger',
       onConfirm: async () => {
         setConfirmModal((prev) => ({ ...prev, isOpen: false }));
-        abortPendingRequests();
+        requestManager.abortCategory('chat');
+        requestManager.abortCategory('image');
+        revokeAllObjectURLs();
+
         try {
-          const res = await fetch(`${API_BASE}/clear`, { method: 'POST', headers: authHeaders() });
+          const headers = authHeaders();
+          if (targetSessionId) {
+            headers['X-Session-ID'] = targetSessionId;
+          }
+          const res = await fetch(`${API_BASE}/clear`, {
+            method: 'POST',
+            headers,
+          });
           if (res.ok) {
             setMessages([]);
             setChatHistory([]);
             setShowWelcome(true);
             showToast('Conversation cleared', 'success');
+          } else {
+            showToast('Failed to clear conversation', 'error');
           }
         } catch {
           showToast('Failed to clear conversation', 'error');
         }
       },
     });
-  }, [showToast, authHeaders, abortPendingRequests]);
+  }, [showToast, authHeaders, messages.length, revokeAllObjectURLs]);
 
   // Export consultation transcript
   const downloadChat = useCallback(() => {
@@ -376,13 +504,38 @@ export default function App() {
     showToast('Chat exported', 'success');
   }, [chatHistory, showToast]);
 
-  // Image upload handling with full Phase 2A/3A safety classification
+  // Image upload handling with full Phase 2A/3A/6 safety classification & validation
   const handleImageUpload = async (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
 
+    // Client-side format and size pre-validation
+    const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5MB
+    const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+
+    if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
+      showToast('Unsupported image format. Please select a JPEG, PNG, or WebP image.', 'error');
+      if (event.target) event.target.value = '';
+      return;
+    }
+    if (file.size > MAX_IMAGE_BYTES) {
+      showToast('Image size exceeds 5MB limit. Please upload a smaller image.', 'error');
+      if (event.target) event.target.value = '';
+      return;
+    }
+
+    const targetSessionId = currentSessionIdRef.current;
+    const targetUserId = user?.user_id || user?.id;
+
+    const request = requestManager.createRequest('image', {
+      userId: targetUserId,
+      sessionId: targetSessionId,
+    });
+
     const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const imageURL = URL.createObjectURL(file);
+    createdObjectURLsRef.current.add(imageURL);
+
     const userMsg = {
       type: 'user',
       content: 'Uploaded medical image for clinical analysis',
@@ -399,16 +552,37 @@ export default function App() {
     formData.append('file', file);
 
     try {
+      const headers = authHeaders();
+      if (targetSessionId) {
+        headers['X-Session-ID'] = targetSessionId;
+      }
+
       const res = await fetch(`${API_BASE}/analyze-image`, {
         method: 'POST',
         body: formData,
-        headers: authHeaders(),
+        headers,
+        signal: request.signal,
       });
+
+      if (!request.isValid(currentSessionIdRef.current)) return;
+
+      if (res.status === 503) {
+        const botMsg = {
+          type: 'assistant',
+          content: '## Specialist Model Unavailable\n\nThe AI specialist model for this modality is currently unavailable or at maximum server capacity. Please retry shortly.',
+          timestamp: new Date().toLocaleTimeString(),
+          source: 'System',
+        };
+        setMessages((prev) => [...prev, botMsg]);
+        return;
+      }
+
       const data = await res.json().catch(() => ({
         status: 'inconclusive',
         message: 'Unable to parse server response.',
       }));
-      console.log('Image API Response:', data);
+
+      if (!request.isValid(currentSessionIdRef.current)) return;
 
       if (data.status === 'model_unavailable') {
         const catName = data.category || 'this modality';
@@ -535,7 +709,8 @@ export default function App() {
         setMessages((prev) => [...prev, botMsg]);
       }
     } catch (err) {
-      console.error('Image analysis error:', err);
+      if (err?.name === 'AbortError') return;
+      if (!request.isValid(currentSessionIdRef.current)) return;
       setMessages((prev) => [
         ...prev,
         {
@@ -544,32 +719,35 @@ export default function App() {
           timestamp: time,
         },
       ]);
+    } finally {
+      request.complete();
+      setIsTyping(false);
+      if (event.target) event.target.value = '';
     }
-
-    setIsTyping(false);
-    event.target.value = '';
   };
 
-  // Send message
-  const sendMessage = useCallback(
-    async (overrideText) => {
-      const message = (overrideText ?? inputValue).trim();
+  // Chat message sending with request lifecycle protection and race guards
+  const handleSendMessage = useCallback(
+    async (textToSend) => {
+      const message = (textToSend || inputValue).trim();
       if (!message || isTyping) return;
 
-      setShowWelcome(false);
       const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      const userMsg = { type: 'user', content: message, timestamp: time, source: null };
+      const userMsg = { type: 'user', content: message, timestamp: time };
+
       setMessages((prev) => [...prev, userMsg]);
       setChatHistory((prev) => [...prev, userMsg]);
       setInputValue('');
-      if (inputRef.current) inputRef.current.style.height = 'auto';
       setIsTyping(true);
+      setShowWelcome(false);
 
-      abortPendingRequests();
-      const controller = new AbortController();
-      activeAbortRef.current = controller;
-      const targetSessionId = currentSessionId;
+      const targetSessionId = currentSessionIdRef.current;
       const targetUserId = user?.user_id || user?.id;
+
+      const request = requestManager.createRequest('chat', {
+        userId: targetUserId,
+        sessionId: targetSessionId,
+      });
 
       try {
         const res = await fetch(`${API_BASE}/chat`, {
@@ -579,14 +757,11 @@ export default function App() {
             ...(targetSessionId ? { 'X-Session-ID': targetSessionId } : {}),
           }),
           body: JSON.stringify({ message }),
-          signal: controller.signal,
+          signal: request.signal,
         });
 
         // Guard against race conditions and stale response injection
-        if (controller.signal.aborted) return;
-        if (currentSessionIdRef.current !== targetSessionId) return;
-        const currentUid = currentUserRef.current?.user_id || currentUserRef.current?.id;
-        if (currentUid !== targetUserId) return;
+        if (!request.isValid(currentSessionIdRef.current)) return;
 
         if (res.status === 409) {
           showToast('Conversation was cleared or modified while message was generating.', 'info');
@@ -594,14 +769,14 @@ export default function App() {
         }
 
         if (res.status === 404) {
-          showToast('Conversation not found or expired. Starting a fresh consultation.', 'info');
+          showToast('Consultation not found or expired. Please start a new conversation.', 'info');
           setCurrentSessionId(null);
           currentSessionIdRef.current = null;
           setMessages((prev) => [
             ...prev,
             {
               type: 'assistant',
-              content: 'This conversation was not found or has expired. A fresh session has been started.',
+              content: 'This consultation was not found or has expired. Please click **New Conversation** to begin a fresh consultation.',
               timestamp: new Date().toLocaleTimeString(),
             },
           ]);
@@ -610,8 +785,9 @@ export default function App() {
         }
 
         const data = await res.json();
+        if (!request.isValid(currentSessionIdRef.current)) return;
+
         if (data.success) {
-          if (currentSessionIdRef.current !== targetSessionId) return;
           const botMsg = {
             type: 'assistant',
             content: data.response,
@@ -640,37 +816,36 @@ export default function App() {
         }
       } catch (err) {
         if (err && err.name === 'AbortError') return;
+        if (!request.isValid(currentSessionIdRef.current)) return;
         setMessages((prev) => [
           ...prev,
           {
             type: 'assistant',
-            content: 'Connection error. Please check your network connection and retry.',
-            timestamp: new Date().toLocaleTimeString(),
+            content: 'Unable to reach the clinical AI assistant. Please check your connection and retry.',
+            timestamp: time,
           },
         ]);
         showToast('Connection error', 'error');
       } finally {
-        if (activeAbortRef.current === controller) {
-          activeAbortRef.current = null;
-        }
+        request.complete();
         setIsTyping(false);
       }
     },
-    [inputValue, isTyping, loadSessions, showToast, authHeaders, currentSessionId, user, abortPendingRequests]
+    [inputValue, isTyping, authHeaders, loadSessions, showToast, user]
   );
 
   const handleQuickQuestion = useCallback(
-    (q) => {
-      setTimeout(() => sendMessage(q), 150);
+    (question) => {
+      handleSendMessage(question);
     },
-    [sendMessage]
+    [handleSendMessage]
   );
 
   const handleFollowUpClick = useCallback(
     (optionText) => {
-      setTimeout(() => sendMessage(optionText), 150);
+      handleSendMessage(optionText);
     },
-    [sendMessage]
+    [handleSendMessage]
   );
 
   const triggerImageUpload = useCallback(() => {
@@ -678,84 +853,21 @@ export default function App() {
   }, []);
 
   const triggerVoiceInput = useCallback(() => {
-    const micBtn = document.querySelector('.composer-action-btn.voice-btn');
-    micBtn?.click();
+    // Focus the input area
+    inputRef.current?.focus();
   }, []);
 
-  // Show Auth Page if not authenticated
-  if (!user || !authToken) {
+  // Not authenticated: render AuthPage
+  if (!user) {
     return <AuthPage onAuthSuccess={handleAuthSuccess} />;
   }
 
-  // Active session title
-  const currentSessionObj = sessions?.find((s) => s.session_id === currentSessionId);
-  const currentSessionTitle = currentSessionObj?.preview || (messages.length > 0 ? 'Active Consultation' : null);
-
   return (
-    <div className="app-layout">
-      {/* Mobile Backdrop Veil */}
-      {isMobile && sidebarOpen && (
-        <div
-          className="sidebar-backdrop"
-          onClick={closeSidebar}
-          aria-hidden="true"
-        />
-      )}
+    <div className="app-shell" data-theme={theme}>
+      {/* Toast Alert */}
+      <Toast toast={toast} onDismiss={dismissToast} />
 
-      {/* Sidebar */}
-      <Sidebar
-        sidebarOpen={sidebarOpen}
-        sessions={sessions}
-        currentSessionId={currentSessionId}
-        onNewChat={createNewChat}
-        onLoadSession={loadSession}
-        onDeleteSession={deleteSession}
-        onToggleTheme={toggleTheme}
-        theme={theme}
-        user={user}
-        onLogout={handleLogout}
-      />
-
-      {/* Main Workspace */}
-      <div className="workspace-main">
-        <Header
-          sidebarOpen={sidebarOpen}
-          onToggleSidebar={toggleSidebar}
-          currentSessionTitle={currentSessionTitle}
-          theme={theme}
-          onToggleTheme={toggleTheme}
-          onClearChat={clearChat}
-          onDownloadChat={downloadChat}
-          user={user}
-          onLogout={handleLogout}
-        />
-
-        <main className="workspace-body">
-          <ChatTimeline
-            messages={messages}
-            isTyping={isTyping}
-            showWelcome={showWelcome}
-            onQuickQuestion={handleQuickQuestion}
-            onFollowUpClick={handleFollowUpClick}
-            onTriggerImageUpload={triggerImageUpload}
-            onTriggerVoiceInput={triggerVoiceInput}
-            chatAreaRef={chatAreaRef}
-          />
-
-          <MessageComposer
-            inputValue={inputValue}
-            setInputValue={setInputValue}
-            onSend={() => sendMessage()}
-            isTyping={isTyping}
-            inputRef={inputRef}
-            onImageUpload={handleImageUpload}
-            fileInputRef={fileInputRef}
-            currentSessionId={currentSessionId}
-          />
-        </main>
-      </div>
-
-      {/* Accessible Confirmation Modal */}
+      {/* Confirmation Modal */}
       <ConfirmationModal
         isOpen={confirmModal.isOpen}
         title={confirmModal.title}
@@ -766,8 +878,72 @@ export default function App() {
         onCancel={() => setConfirmModal((prev) => ({ ...prev, isOpen: false }))}
       />
 
-      {/* Floating Status Notification */}
-      <Toast toast={toast} onDismiss={dismissToast} />
+      <div className="app-layout">
+        {/* Sidebar Drawer Backdrop for Mobile */}
+        {sidebarOpen && isMobile && (
+          <div
+            className="sidebar-backdrop"
+            onClick={closeSidebar}
+            aria-hidden="true"
+          />
+        )}
+
+        {/* Sidebar Navigation */}
+        <Sidebar
+          isOpen={sidebarOpen}
+          sessions={sessions}
+          currentSessionId={currentSessionId}
+          user={user}
+          theme={theme}
+          onNewChat={createNewChat}
+          onLoadSession={loadSession}
+          onDeleteSession={deleteSession}
+          onLogout={handleLogout}
+          onToggleTheme={toggleTheme}
+        />
+
+        {/* Workspace Main View */}
+        <div className="workspace-main">
+          {/* Header */}
+          <Header
+            sidebarOpen={sidebarOpen}
+            onToggleSidebar={toggleSidebar}
+            onClearChat={clearChat}
+            onDownloadChat={downloadChat}
+            theme={theme}
+            onToggleTheme={toggleTheme}
+            user={user}
+            onLogout={handleLogout}
+          />
+
+          {/* Main Clinical Workspace */}
+          <main className="chat-container">
+            {/* Timeline */}
+            <ChatTimeline
+              messages={messages}
+              isTyping={isTyping}
+              showWelcome={showWelcome}
+              chatAreaRef={chatAreaRef}
+              onQuickQuestion={handleQuickQuestion}
+              onTriggerImageUpload={triggerImageUpload}
+              onTriggerVoiceInput={triggerVoiceInput}
+              onFollowUpClick={handleFollowUpClick}
+            />
+
+            {/* Bottom Message Composer */}
+            <MessageComposer
+              inputValue={inputValue}
+              setInputValue={setInputValue}
+              isTyping={isTyping}
+              onSend={() => handleSendMessage()}
+              onImageUpload={handleImageUpload}
+              fileInputRef={fileInputRef}
+              inputRef={inputRef}
+              currentSessionId={currentSessionId}
+            />
+          </main>
+        </div>
+      </div>
     </div>
   );
 }
