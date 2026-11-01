@@ -115,6 +115,17 @@ Phase 1D implemented generational versioning (`_versions`) and deletion tombston
 - Clarified Hugging Face Spaces pricing model: while CPU Basic compute incurs no hourly charge ($0/hr), creating a new Space with the Docker SDK generally requires a paid account plan (such as HF PRO at $9/mo) or payment card verification; creating a new private Docker staging Space cannot be characterized as guaranteed free ($0).
 - Zero-cost verification and presentation workflows are executed via local deployment (`python run.py`) or free public GitHub Actions runners (`ubuntu-latest`).
 
+### 5. GitHub Actions Runner Node Runtime Modernization
+- GitHub Actions runners announced deprecation of Node.js 20 runtime for actions (`actions/checkout@v4`, `actions/setup-node@v4`).
+- Modernized `.github/workflows/docker-ci.yml` by updating to `actions/checkout@v7` and `actions/setup-node@v7`, which execute on the Node 24 action runtime while preserving the Node.js 20 build target for frontend compilation, eliminating runner deprecation warnings.
+
+### 6. Production Space Baseline & Ephemeral Storage Risk Analysis
+- Recorded authoritative production baseline commit `dadb57ad4088a280c2aab9b3781ff42a4a30df25` on `https://huggingface.co/spaces/sg721642/NewGenHealthAI`.
+- Analyzed container lifecycle risks on Hugging Face Spaces: without a mounted persistent volume, any container rebuild permanently deletes the ephemeral SQLite database (`/app/backend/storage/chat_db/susham_health.db`).
+- Documented that public persistent-user deployment must be marked BLOCKED until persistent block storage or an external relational database (e.g., PostgreSQL) is attached.
+- Authored step-by-step reversible deployment procedure with atomic rollback command (`git push -f huggingface dadb57ad4088a280c2aab9b3781ff42a4a30df25:main`).
+- Reconfirmed that zero pushes to external spaces were performed under the strict ₹0 budget constraint.
+
 ## A16 Preservation Notes
 
 The following legacy identifiers were intentionally preserved for database compatibility:

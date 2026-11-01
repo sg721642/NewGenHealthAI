@@ -447,7 +447,7 @@ A straightforward, reproducible local demonstration procedure requiring zero clo
 - Python 3.10, 3.11, 3.12, or 3.13 installed.
 - Node.js 20+ installed.
 
-#### Step B: Quick Setup & Build (Terminal 1)
+#### Step B: Environment Setup & Build (Terminal 1)
 ```bash
 # 1. Clone & enter repository
 git clone https://github.com/sg721642/NewGenHealthAI.git
@@ -466,34 +466,57 @@ source venv/bin/activate
 pip install -r backend/requirements.txt
 ```
 
-#### Step C: Launch Unified System
-```bash
-# Set synthetic test configuration (or set real GROQ_API_KEY for live LLM)
-export SESSION_SECRET_KEY="presentation_demo_secret_key_minimum_32_characters"
-export ALLOW_MODEL_DOWNLOADS="false"
+#### Step C: Local Execution Modes & Exact URLs
+1. **Full-Stack Development Mode (Interactive Presentation Default)**:
+   ```bash
+   export SESSION_SECRET_KEY="presentation_demo_secret_key_minimum_32_characters"
+   export ALLOW_MODEL_DOWNLOADS="false"
+   python run.py
+   ```
+   - **Vite Frontend UI**: `http://localhost:5173` (with hot-reloading)
+   - **FastAPI Backend API**: `http://localhost:8000`
+   - **Interactive OpenAPI Documentation**: `http://localhost:8000/docs`
 
-# Launch unified server (FastAPI serves both backend API and built Vite frontend)
-python run.py
-```
-*The application opens automatically at `http://localhost:8000` (or `http://localhost:7860`).*
+2. **Integrated Production Standalone Mode (Zero-Dev-Server Mode)**:
+   ```bash
+   # Frontend assets served directly by FastAPI static mount
+   export SESSION_SECRET_KEY="presentation_demo_secret_key_minimum_32_characters"
+   export ALLOW_MODEL_DOWNLOADS="false"
+   export PYTHONPATH=backend
+   python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+   ```
+   - **Integrated Application**: `http://localhost:8000`
+
+3. **Integrated Container Mode (Docker)**:
+   ```bash
+   docker run -p 7860:7860 \
+     -e SESSION_SECRET_KEY="presentation_demo_secret_key_minimum_32_characters" \
+     -e ALLOW_MODEL_DOWNLOADS="false" \
+     newgenhealthai:test
+   ```
+   - **Container Application**: `http://localhost:7860`
 
 #### Step D: 5-Minute Presentation Demonstration Script
 1. **Introduction & Architecture (1 min)**:
    - Highlight the modern healthcare UI/UX design system (light-first teal theme, dark mode toggle, responsive drawer navigation).
-   - Explain the decoupled architecture: React 18 frontend + FastAPI backend + LangGraph clinical workflow + SQLite WAL database.
-2. **Authentication & Security Demo (1 min)**:
+   - Explain the decoupled architecture: React 19 frontend + FastAPI backend + LangGraph clinical workflow + SQLite WAL database.
+   - Point out what works **offline** (authentication, session ownership, acute emergency screening, fallback triage, responsive layout) versus what requires **external services** (Groq LLM for generative triage, Groq Whisper for STT, Edge-TTS for online speech, Tavily for search).
+2. **Authentication & Cryptography Demo (1 min)**:
    - Register a demo account (`dr_evaluator` / `SecurePassword123!`).
-   - Demonstrate that passwords use Argon2id memory-hard hashing and bearer tokens are stored in the database exclusively as SHA-256 hashes.
+   - Explain that passwords use **Argon2id memory-hard password hashing** (a one-way cryptographic derivation function resisting GPU/ASIC brute force, strictly distinguished from two-way encryption) and bearer tokens are stored in the database exclusively as SHA-256 hashes.
 3. **Clinical Intake & Medical Safety Safeguards (1.5 min)**:
    - Submit an educational symptom query: *"I've had a persistent dry cough and low-grade fever for three days."*
-   - Point out the medical disclaimer banner, educational triage framing, and absence of prescription drug dosages.
+   - Point out the medical disclaimer banner, educational triage framing, and strict prohibition on prescription drug dosages.
    - Submit an acute emergency query: *"Sudden severe chest pain radiating to left arm and jaw."*
-   - Show the offline emergency triage intercept triggering immediately, presenting emergency hotlines (India 112, Tele-MANAS 14416) without diagnosing.
+   - Show the offline emergency triage intercept triggering immediately, presenting emergency hotlines (India 112, Tele-MANAS 14416) without diagnosing. Emphasize that the software is an educational prototype and does not claim medical diagnosis accuracy or regulatory certification.
 4. **Session Management & Isolation Demo (1 min)**:
    - Create a second consultation session via "New Conversation".
    - Switch between conversations in the sidebar; show instant rehydration from physical SQLite records.
    - Click "Clear Conversation" and show modal keyboard focus trapping.
-5. **Immediate Safe Logout & Token Revocation (30 sec)**:
+5. **Vision & Voice Unavailable Handling (30 sec)**:
+   - Demonstrate that uploading an image when specialist `.pth` weights are unbundled (`MISSING_ARTIFACT`) returns a clean HTTP 503 `model_unavailable` with user-friendly guidance rather than crashing.
+   - Demonstrate that voice recording when external STT credentials are absent returns a safe HTTP 422/503 toast rather than an uncaught exception.
+6. **Immediate Safe Logout & Token Revocation (30 sec)**:
    - Click "Log Out"; show instantaneous client state wipe.
    - Demonstrate that the old session token is permanently revoked (returning HTTP 401 on any replay).
 
@@ -503,7 +526,7 @@ python run.py
 
 - [x] **Repository Integrity**: Git working tree clean; tracked files aligned; no leftover test artifacts or unmanaged tempfiles.
 - [x] **Branding & Authorship**: Author set to `Satyam Gupta <sg721642@gmail.com>`; authentic contributors documented; legacy project names eliminated.
-- [x] **Authentication & Cryptography**: Argon2id hashing active; SHA-256 token hashing; persistent `SESSION_SECRET_KEY`; rate limiting enforced.
+- [x] **Authentication & Cryptography**: Argon2id password hashing active; SHA-256 token hashing; persistent `SESSION_SECRET_KEY`; rate limiting enforced.
 - [x] **Patient Privacy**: Zero bearer tokens, passwords, patient symptoms, or medical queries printed in client console or CI logs.
 - [x] **Cross-Account Isolation**: Verified User A vs User B data isolation with fail-closed HTTP 404 access denial.
 - [x] **Clinical Safety Guardrails**: Pure offline emergency screening active; physician impersonation prohibited; crisis helplines verified.
@@ -514,20 +537,63 @@ python run.py
 
 ---
 
-### Staging & Production Deployment Authorization Checkpoint (STOP & AWAIT)
+## Production Space (Hugging Face) Deployment Preparation & Risk Analysis
 
+Authoritative technical preparation for future explicitly authorized deployment to the existing production Hugging Face Space:
+
+### 1. Existing Production Space Metadata & Baseline
+- **Target Space URL**: [`https://huggingface.co/spaces/sg721642/NewGenHealthAI`](https://huggingface.co/spaces/sg721642/NewGenHealthAI)
+- **Current Deployed Revision**: `dadb57ad4088a280c2aab9b3781ff42a4a30df25` (commit on `main`).
+- **Space SDK**: Docker (`app_port: 7860`).
+- **Hardware Tier**: CPU Basic (2 vCPU, 16GB RAM) — Zero hourly charge ($0/hr).
+- **Storage Type**: Ephemeral container filesystem (`/app`).
+
+### 2. Existing Database & User-Data Risks
+- **Container Recreation Data Loss**: In an ephemeral Docker Space on Hugging Face, restarting, factory-rebooting, or rebuilding the container creates a completely fresh filesystem. Any database file stored at `/app/backend/storage/chat_db/susham_health.db` is **permanently destroyed**.
+- **No Durable Storage Guarantee**: Replacing the current production Space with a new commit **will wipe its existing SQLite database** if one was created during runtime.
+- **SQLite WAL on Cloud Mounts**: Attaching network object storage (such as S3 or GCS buckets) does not provide POSIX `fcntl` locking or `.shm` shared memory mapping, leading to SQLite WAL corruption.
+- **Deployment Status**: **Public persistent-user deployment is BLOCKED** from offering durable data retention until dedicated persistent block storage or a managed relational database (e.g., PostgreSQL) is attached. For evaluation purposes, the Space operates safely with an ephemeral database seeded on startup.
+
+### 3. Required Environment Variables & Secrets
+The target Space requires the following repository variables/secrets configured in **Space Settings → Secrets**:
+- `SESSION_SECRET_KEY`: **Required** (minimum 32 characters, used for Starlette session cookie signing; production mode fails startup if absent or too short).
+- `GROQ_API_KEY`: **Required for live LLM** (used for Groq clinical reasoning and Whisper STT).
+- `ALLOWED_ORIGINS`: Optional/Recommended (set to `https://sg721642-newgenhealthai.hf.space,http://localhost:7860`).
+- `TRUSTED_PROXIES`: Optional/Recommended (set to `127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12` to handle Hugging Face reverse proxy headers safely).
+- `ALLOW_MODEL_DOWNLOADS`: Set to `false` to guarantee deterministic, fast container boot without network timeout.
+- *Secret Values Status*: Secret values must never be checked into Git or printed in CI logs. They are managed exclusively through Hugging Face's secure web UI.
+
+### 4. Database Schema Compatibility & Migration
+If a database file were retained or mounted:
+- **Schema v1**: Automatically creates `conversations` table and migrates ownership; ambiguous or orphan sessions fail-closed into quarantine (`is_quarantined=1, user_id=0`) without deleting messages.
+- **Schema v2**: Automatically converts `user_sessions` to SHA-256 token hashing (`token_hash`) and sets session expiration. Legacy PBKDF2 passwords are automatically verified and upgraded to Argon2id on first user login via optimistic concurrency.
+- **Pre-migration Safety**: Step-wise atomic transactions with SQLite Online Backup (`src.backup(dst)`) and `PRAGMA integrity_check` validation.
+
+### 5. Reversible Deployment & Rollback Runbook (When Authorized)
+When the maintainer explicitly approves deployment:
+```bash
+# 1. Add Hugging Face remote (if not already added)
+git remote add huggingface https://huggingface.co/spaces/sg721642/NewGenHealthAI
+
+# 2. Push verified release candidate to Hugging Face main branch
+git push huggingface fix/healthai-audit-premium-ui:main
+
+# 3. Monitor container build in Hugging Face web interface
+# Downtime risk: 3 to 5 minutes while the multi-stage Docker image builds on Hugging Face runners.
+
+# 4. Immediate Rollback Procedure (in case of unexpected regression)
+git push -f huggingface dadb57ad4088a280c2aab9b3781ff42a4a30df25:main
+```
+
+### 6. Deployment Authorization Status
 > [!IMPORTANT]
-> **FINAL RELEASE CANDIDATE READY (`v3.0.0-rc2`) — STRICT ZERO-BUDGET PROTOCOL**
+> **NO PRODUCTION DEPLOYMENT WAS PERFORMED**
 > 
-> All 11 verification gates have passed with 100% success.
-> - **Budget Status**: Strictly ₹0 incurred.
-> - **Production Space Status**: `https://huggingface.co/spaces/sg721642/NewGenHealthAI` remains **100% UNTOUCHED**.
-> - **External Deployment**: Awaiting explicit maintainer authorization before deploying externally.
-> 
-> When authorized, deployment options are:
-> 1. **Option A (Zero-Cost Local / Presentation Demo - Recommended)**: Execute `python run.py` locally or run Docker container locally. 100% free, 0 external dependencies.
-> 2. **Option B (Zero-Cost CI Container Run)**: Automated on GitHub Actions Ubuntu runner (`.github/workflows/docker-ci.yml`) on every push. 100% free under GitHub public runner quota.
-> 3. **Option C (Existing Production Space Update)**: When authorized, deploy commit directly to existing production Space (`sg721642/NewGenHealthAI`), avoiding new Space creation fees.
+> As strictly mandated:
+> - Zero pushes to `https://huggingface.co/spaces/sg721642/NewGenHealthAI` were made.
+> - The production Space remains running at baseline commit `dadb57ad4088a280c2aab9b3781ff42a4a30df25`.
+> - Zero financial cost was incurred (strictly ₹0).
+> - All verifications were performed using local environments and free GitHub Actions runners.
 
 
 

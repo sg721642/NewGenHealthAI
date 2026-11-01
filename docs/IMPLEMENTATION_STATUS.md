@@ -24,12 +24,14 @@
 | Phase 6 commit | `5a42aec49f0ec07c3ae038512a4539ae70e35451` |
 | Phase 6 doc commit | `23b4efe98ca0d27e110803fe04ecc31879cb7b8e` |
 | Phase 7A commit | `ffe73b0cbdbc8fb92194c9c1ee43a55f272e3f0d` |
-| Phase 7B commit | `4339bc0a4784b50f78418f5e1032cc52059399f6` |
+| Phase 7B (rc1) commit | `22bb222fa78f6da2c64ae67c0ad8761091e8be57` (`v3.0.0-rc1`) |
+| Phase 7B (rc2) commit | `2091d6d8da26319f0c1e3cea377c5f9b98182c23` (`v3.0.0-rc2`) |
+| Phase 7B (rc3) pending | Release Candidate 3 (`v3.0.0-rc3`) |
 
 | Current phase | Phase 7B — Controlled Staging Preparation, CI Hardening, and Zero-Budget Readiness |
 | Next phase | Production Deployment & Canary Cutover (Awaiting explicit owner approval) |
 
-| Git identity | `sg721642 <sg721642@gmail.com>` |
+| Git identity | `Satyam Gupta <sg721642@gmail.com>` |
 | Maintainer | Satyam Gupta |
 
 ## Deployment
@@ -37,6 +39,7 @@
 | Field | Value |
 |---|---|
 | Hugging Face Production Space | `https://huggingface.co/spaces/sg721642/NewGenHealthAI` |
+| Production Space Baseline SHA | `dadb57ad4088a280c2aab9b3781ff42a4a30df25` |
 | Space SDK | Docker (app_port 7860) |
 | Production Revision Status | **100% UNTOUCHED** (Strict budget ₹0, zero external mutation) |
 | Proposed Staging Space | `sg721642/NewGenHealthAI-Staging` (Deferred pending explicit authorization) |
@@ -231,8 +234,11 @@
 - [x] **Diagnostics Restriction on Failure**: Updated container log collection step in CI to execute only on `failure()` instead of `always()`, maintaining clean, concise run logs on passing builds.
 - [x] **Pytest Discovery Configuration & Script Relocation**: Added root `pytest.ini` with `testpaths = backend/tests` and moved standalone CLI tool `backend/test_clip_routing.py` to `backend/scripts/verify_clip_routing.py`, ensuring root `pytest` invocation runs cleanly without test collection errors (310/310 passed).
 - [x] **Responsive Mobile Backdrop Click Correction**: Fixed coordinate calculation in `frontend/scripts/browser_qa.cjs` to target exposed backdrop (x > 280px) on mobile viewports, preventing pointer interception by open sidebar drawer (9/9 screenshots, 0 console errors, 0 overflow).
-- [x] **Strict Budget Protocol Enforcement (₹0 Budget)**: Enforced strict zero-cost boundary: zero paid cloud resources, zero Hugging Face Space creation, zero external mutations. Existing production Space (`https://huggingface.co/spaces/sg721642/NewGenHealthAI`) remains 100% untouched.
-- [x] **Release Candidate Specification (v3.0.0-rc1)**: Packaged and verified all local and container acceptance criteria, establishing pre-flight staging checkpoint awaiting explicit user authorization.
+- [x] **Strict Budget Protocol Enforcement (₹0 Budget)**: Enforced strict zero-cost boundary: zero paid cloud resources, zero Hugging Face Space creation, zero external mutations. Existing production Space (`https://huggingface.co/spaces/sg721642/NewGenHealthAI`) remains 100% untouched at baseline revision `dadb57ad4088a280c2aab9b3781ff42a4a30df25`.
+- [x] **GitHub Actions Runner Engine Modernization**: Upgraded `actions/checkout@v7` and `actions/setup-node@v7` in `.github/workflows/docker-ci.yml`, resolving Node.js 20 deprecation warnings on GitHub Actions runners natively while keeping Node.js 20 application target.
+- [x] **College Demo Presentation Polish & Accurate Documentation**: Corrected React version to React 19 in runbooks and architecture docs; documented Argon2id as a one-way memory-hard derivation function (not encryption); validated local URLs (`http://localhost:5173`, `http://localhost:8000`, `http://localhost:7860`); clearly documented offline functionality vs cloud dependencies; detailed graceful degradation for unavailable vision/voice models.
+- [x] **Production Space Reversible Deployment Runbook**: Prepared explicit zero-risk cutover procedure with immediate rollback command (`git push -f huggingface dadb57ad4088a280c2aab9b3781ff42a4a30df25:main`), secret requirements, and documented data loss risks on ephemeral container rebuilds.
+- [x] **Release Candidate Progression**: Packaged verified release candidates: `v3.0.0-rc1` (pinned to `22bb222fa78f6da2c64ae67c0ad8761091e8be57`), `v3.0.0-rc2` (pinned to `2091d6d8da26319f0c1e3cea377c5f9b98182c23`), and pending `v3.0.0-rc3`.
 
 ## Verification Outcomes
 
