@@ -309,7 +309,7 @@ export default function App() {
 
     const request = requestManager.createRequest('history', {
       userId: user?.user_id || user?.id,
-      sessionId: currentSessionId,
+      sessionId: currentSessionIdRef.current,
     });
 
     fetch(`${API_BASE}/history`, {
@@ -325,6 +325,7 @@ export default function App() {
             content: m.content,
             timestamp: m.timestamp || '',
             source: m.source || null,
+            followUp: m.follow_up || m.followUp || null,
           }));
           setMessages(msgs);
           setChatHistory(msgs.map((m) => ({ ...m })));
@@ -341,7 +342,7 @@ export default function App() {
     return () => {
       request.abort();
     };
-  }, [loadSessions, user, authToken, authHeaders, currentSessionId]);
+  }, [loadSessions, user, authToken, authHeaders]);
 
   // Load specific consultation session
   const loadSession = useCallback(
