@@ -1,6 +1,6 @@
 # NewGenHealthAI — Test Evidence & Verification Records
 
-Last updated: Phase 3B (Secure Voice Processing, Reliable STT/TTS and Resource Protection)
+Last updated: Phase 4 (Repository Cleanup, Branding, Dependencies and Deployment Consistency)
 
 ## Phase 1B Test Execution Summary
 
@@ -796,4 +796,110 @@ New Frontend Tests Added in Phase 3B:
 Linter & Production Build:
 - **ESLint**: 0 errors, 0 warnings (`npm --prefix frontend run lint`)
 - **Vite Build**: Clean production bundle output to `backend/app/static/assets/index-wdGNyF6d.js` (398.45 kB) and `index-CB66vf3N.css` (18.46 kB).
+
+---
+
+## Phase 4 Test Execution Summary
+
+### 1. Full Backend Test Suite (Pytest)
+
+Command:
+```bash
+PYTHONPATH=backend /tmp/nghai_venv/bin/pytest backend/tests/ -v
+```
+
+Outcome:
+- **Total Test Files**: 21
+- **Total Tests**: 300
+- **Passed**: 300 (100%)
+- **Failed**: 0
+- **Skipped**: 0
+- **Duration**: 4.66s
+- **Exit Code**: 0
+
+Test File Breakdown:
+| Test File | Total | Passed | Failed | Skipped | Status |
+|---|---|---|---|---|---|
+| `test_agents.py` | 13 | 13 | 0 | 0 | Passed |
+| `test_api.py` | 10 | 10 | 0 | 0 | Passed |
+| `test_auth_hardening.py` | 13 | 13 | 0 | 0 | Passed |
+| `test_chat_service.py` | 10 | 10 | 0 | 0 | Passed |
+| `test_database.py` | 3 | 3 | 0 | 0 | Passed |
+| `test_database_migration.py` | 4 | 4 | 0 | 0 | Passed |
+| `test_image_preprocessing.py` | 13 | 13 | 0 | 0 | Passed |
+| `test_logging.py` | 4 | 4 | 0 | 0 | Passed |
+| `test_phase1c1_hardening.py` | 16 | 16 | 0 | 0 | Passed |
+| `test_phase1d_concurrency.py` | 34 | 34 | 0 | 0 | Passed |
+| `test_phase2a_image_classifier.py` | 27 | 27 | 0 | 0 | Passed |
+| `test_phase2b_workflow_safety.py` | 23 | 23 | 0 | 0 | Passed |
+| `test_phase2b1_corrections.py` | 28 | 28 | 0 | 0 | Passed |
+| `test_phase3a_image_security.py` | 27 | 27 | 0 | 0 | Passed |
+| `test_phase3b_voice_security.py` | 29 | 29 | 0 | 0 | Passed |
+| `test_phase4_hardening.py` | 15 | 15 | 0 | 0 | Passed |
+| `test_security_ownership.py` | 18 | 18 | 0 | 0 | Passed |
+| `test_services.py` | 11 | 11 | 0 | 0 | Passed |
+| `test_tools.py` | 12 | 12 | 0 | 0 | Passed |
+| `test_workflow.py` | 1 | 1 | 0 | 0 | Passed |
+| `test_workflow_routing.py` | 7 | 7 | 0 | 0 | Passed |
+| **Total Suite** | **300** | **300** | **0** | **0** | **Passed (100%)** |
+
+Phase 4 Regression Matrix Coverage (`test_phase4_hardening.py`):
+| Matrix Scenario | Scenario Description & Security Guarantee | Test Function | Outcome |
+|---|---|---|---|
+| **STT Cancellation Safety** | Task cancellation during STT permit wait cleans up active user reservation and leaves semaphore consistent | `test_cancelled_stt_acquisition_cleans_up_active_user` | ✅ Pass |
+| **TTS Cancellation Safety** | Task cancellation during TTS permit wait cleans up active user reservation and leaves semaphore consistent | `test_cancelled_tts_acquisition_cleans_up_active_user` | ✅ Pass |
+| **Idempotent Permit Release** | Calling `VoicePermit.release()` multiple times releases semaphore and active user slot exactly once | `test_permit_release_is_idempotent` | ✅ Pass |
+| **Concurrent Same-User 429** | Simultaneous voice requests for the same user are rejected with HTTP 429 Too Many Requests | `test_simultaneous_requests_same_user_rejected_with_429` | ✅ Pass |
+| **TTS Oversized Stream Abort** | Streaming generator terminating upon reaching `MAX_TTS_STREAM_BYTES` (5MB) releases permit immediately | `test_tts_oversized_stream_terminates_cleanly` | ✅ Pass |
+| **TTS Stream Timeout Bound** | Streaming generator exceeding `TTS_STREAM_TIMEOUT_SECONDS` (30.0s) aborts stream and releases capacity | `test_tts_stream_timeout_bounds_execution` | ✅ Pass |
+| **Permanent STT Error Fast-Fail** | Permanent client error (HTTP 400 Bad Request) fails immediately with HTTP 503 without retrying or fallback | `test_stt_permanent_error_fails_immediately_without_fallback` | ✅ Pass |
+| **Transient STT Error Fallback** | Transient rate-limit error (HTTP 429) triggers automatic retry using secondary fallback model (`whisper-large-v3`) | `test_stt_transient_error_retries_with_fallback` | ✅ Pass |
+| **Canonical Frontend Entry** | Root `frontend/index.html` has title `NewGenHealthAI`, description meta, and `/favicon.svg`; obsolete duplicate in `public/` removed | `test_canonical_frontend_entry_html` | ✅ Pass |
+| **Vite Standalone Build Config** | `vite.config.js` and `package.json` support standalone build mode (`build:standalone`) outputting to `dist` | `test_vite_standalone_build_output_config` | ✅ Pass |
+| **Launcher Dynamic Paths** | `run.py` resolves paths relative to `__file__` without hardcoded machine paths, locating python and npm executables | `test_launcher_path_and_executable_resolution` | ✅ Pass |
+| **Launcher Backend Wait Timeout** | `wait_for_backend` returns False safely if server does not respond within retry window | `test_launcher_wait_for_backend_timeout` | ✅ Pass |
+| **Launcher Graceful Process Term** | `terminate_process` shuts down active and terminated child processes gracefully without orphaned processes | `test_launcher_terminate_process` | ✅ Pass |
+| **Public Backend Healthcheck** | `/api/v1/health` returns HTTP 200 with `status: ok` and project branding without requiring auth | `test_backend_health_check_public` | ✅ Pass |
+| **Complete .env.example Validation** | `.env.example` contains all critical production and operational configuration keys | `test_env_example_contains_all_critical_keys` | ✅ Pass |
+
+### 2. Frontend Test Suite (Vitest)
+
+Command:
+```bash
+npm --prefix frontend test -- --run
+```
+
+Outcome:
+- **Total Test Files**: 1
+- **Total Tests**: 13
+- **Passed**: 13 (100%)
+- **Failed**: 0
+- **Duration**: 377ms
+- **Exit Code**: 0
+
+### 3. Frontend Linter (ESLint)
+
+Command:
+```bash
+npm --prefix frontend run lint
+```
+
+Outcome:
+- **Errors**: 0
+- **Warnings**: 0
+- **Exit Code**: 0
+
+### 4. Frontend Bundle Builds
+
+Commands:
+```bash
+npm --prefix frontend run build
+npm --prefix frontend run build:standalone
+```
+
+Outcome:
+- **Integrated Build**: Vite bundled to `backend/app/static` (index.html: 0.80 kB, index.js: 398.45 kB, index.css: 18.46 kB) in 500ms.
+- **Standalone Build**: Vite bundled to `frontend/dist` (index.html: 0.80 kB, index.js: 398.45 kB, index.css: 18.46 kB) in 460ms.
+- **Exit Code**: 0
+
 

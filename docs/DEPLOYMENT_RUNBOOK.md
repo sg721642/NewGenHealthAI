@@ -1,6 +1,6 @@
 # NewGenHealthAI — Deployment Runbook
 
-> **Status**: Phase 3B (Secure Voice Processing, Reliable STT/TTS and Resource Protection).
+> **Status**: Phase 4 (Repository Cleanup, Branding, Dependencies and Deployment Consistency).
 > Runbook is authoritative for the Docker + Hugging Face Spaces deployment path.
 
 ## Architecture
@@ -310,8 +310,17 @@ npm --prefix frontend run dev
 - [x] Hardened TTS synthesis (POST, 2..2000 chars, markdown stripping, voice allowlists, anti-caching headers, disconnect cleanup) (A08 / Phase 3B)
 - [x] Voice log redaction (filenames, transcripts, spoken text, audio payloads, exception details redacted) (A08 / Phase 3B)
 - [x] Frontend voice lifecycle (AbortController for STT/TTS, mic track release, permission denial handling) (Phase 3B)
-- [x] Complete backend test suite inventory verified (285 passed, 0 skipped, 0 failed)
-- [x] Frontend build clean with lint passing (0 errors, 0 warnings, 13/13 tests pass)
+- [x] VoiceCapacityManager cancellation safety & idempotent permit release (Phase 4 / A07)
+- [x] Bounded TTS streaming resources (timeout 30.0s, max 5MB, clean permit release on disconnect) (Phase 4 / A08)
+- [x] Strict STT retry error classification (fail-fast on permanent 400/401; retry on transient 429/500/503/timeout) (Phase 4 / A08)
+- [x] Duplicate `public/index.html` eliminated; canonical `index.html` updated with medical favicon (Phase 4 / A12)
+- [x] Standalone Vite build (`build:standalone`) and standalone Nginx Dockerfile verified (Phase 4 / A12)
+- [x] Unified root multi-stage Dockerfile with non-root user (UID 1000) and healthcheck verified (Phase 4 / A12)
+- [x] Root launcher `run.py` hardened (no torch monkeypatch, dynamic paths, signal handling, healthcheck) (Phase 4 / A14)
+- [x] Dependency manifests consolidated & `pyproject.toml` aligned with `requirements.txt` (Phase 4 / A13)
+- [x] First-party branding verified, comprehensive `.env.example` created, project PDFs verified (Phase 4 / A16)
+- [x] Complete backend test suite inventory verified (300 passed, 0 skipped, 0 failed across 21 test files)
+- [x] Frontend build clean with lint passing (0 errors, 0 warnings, 13/13 tests pass, standalone + integrated builds pass)
 - [ ] HF Space running status verified with live credentials (post-deployment)
 
 

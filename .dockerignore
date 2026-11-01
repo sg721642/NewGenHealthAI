@@ -40,6 +40,16 @@ backend/storage/vector_store/
 
 # Build outputs (rebuilt inside Docker)
 backend/app/static/
+frontend/dist/
+dist/
+
+# Database files & model caches
+*.db
+*.db-wal
+*.db-shm
+*.backup_*
+model_cache/
+docs/*.pdf
 
 # Planning and local documents not needed in image
 NewGenHealthAI_Antigravity_Master_Plan.md

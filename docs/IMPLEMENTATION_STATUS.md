@@ -19,9 +19,10 @@
 | Phase 2B.1 commit | `01a574a470edc880c99b6742b2bf0ae65b1ab4ec` |
 | Phase 3A commit | `5a4427f2c34e24a7bd189b1e8b6e5c143dde6454` |
 | Phase 3B commit | `489599920066189665c1798de09488a398d3d947` |
+| Phase 4 commit | Pending Git Push |
 
-| Current phase | Phase 3B — Secure Voice Processing, Reliable STT/TTS and Resource Protection |
-| Next phase | Phase 4 — branding cleanup, PDF/documentation corrections and repository/deployment consistency |
+| Current phase | Phase 4 — Repository Cleanup, Branding, Dependencies and Deployment Consistency |
+| Next phase | Phase 5 — Premium Healthcare UI/UX Redesign |
 
 | Git identity | `sg721642 <sg721642@gmail.com>` |
 | Maintainer | Satyam Gupta |
@@ -37,7 +38,7 @@
 
 ## Current Phase
 
-**Phase 3B — Secure Voice Processing, Reliable STT/TTS and Resource Protection** ✅ Complete
+**Phase 4 — Repository Cleanup, Branding, Dependencies and Deployment Consistency** ✅ Complete
 
 ## Completed Tasks
 
@@ -164,14 +165,28 @@
 - [x] **Section 11 Follow-up Verifications**: Documented that `asyncio.to_thread` bounds event loop response wait without forcibly terminating synchronous worker thread sockets; verified that Phase 3A lazy model loading applies to `.pth` weight checkpoints while module-level framework imports (`torch`) occur on import; retained A02 real async clear/delete integration test gap.
 - [x] **Comprehensive Phase 3B Test Suite**: Added 29 new automated tests in `test_phase3b_voice_security.py` (total backend suite: 285/285 passing, 0 skipped, 0 failed) and 2 new frontend tests in `App.test.jsx` (13/13 passing).
 
+### Phase 4
+- [x] **Cancellation-Safe Voice Capacity Manager (Residual Phase 3B / A07)**: Hardened `VoiceCapacityManager` to release user reservations and acquired semaphores deterministically on `asyncio.CancelledError`, prevent duplicate releases, and ensure `VoicePermit.release()` is completely idempotent.
+- [x] **Bounded TTS Streaming Resources (Residual Phase 3B / A08)**: Enforced `TTS_STREAM_TIMEOUT_SECONDS` (30.0s) and `MAX_TTS_STREAM_BYTES` (5MB) in `audio_stream_generator`, aborting oversized or hanging edge-tts streams and guaranteeing clean permit release on client disconnects and premature terminations.
+- [x] **Strict STT Error Classification (Residual Phase 3B / A08)**: Differentiated transient errors (rate limit 429, 500, 502, 503, 504, timeout -> fallback to `whisper-large-v3`) from permanent client/auth errors (400, 401, 403, 404, 422 -> fail fast immediately with 503/400 without unhelpful retries).
+- [x] **Eliminated Duplicate Frontend Entrypoint (A12)**: Removed obsolete `frontend/public/index.html` (which referenced legacy `MediGenius` title and missing script); added medical AI `favicon.svg` to `frontend/public/`; updated canonical `frontend/index.html` with `NewGenHealthAI` title, metadata description, and `/favicon.svg`.
+- [x] **Standalone & Unified Docker Frontend Builds (A12)**: Added `"build:standalone": "vite build --mode standalone"` to `frontend/package.json`; updated `frontend/Dockerfile` to build standalone and copy from `/app/dist` to Nginx html; hardened root `Dockerfile` to build standalone into `dist` and copy into `/app/backend/app/static`, non-root user `user` (UID 1000), directory ownership, and `/api/v1/health` healthcheck. Hardened `backend/Dockerfile` with non-root user and healthcheck.
+- [x] **Hardened Multi-Platform Launcher `run.py` & Windows Helper (A14)**: Completely eliminated `torch.__version__ = "2.6.1"` runtime monkeypatch; resolved all paths dynamically relative to `__file__`; eliminated `shell=True` subprocess calls; registered clean `SIGINT`/`SIGTERM` signal handlers to terminate child processes gracefully and eliminate orphaned background workers; added automated `/api/v1/health` readiness polling. Hardened `run_medai.bat` by removing hardcoded models directory blocker and updating branding.
+- [x] **Dependency Consolidation & Pyproject Alignment (A13)**: Renamed project in `backend/pyproject.toml` to `newgenhealthai-backend`, updated author to `Satyam Gupta <sg721642@gmail.com>`, removed unused `tensorflow==2.15.0`, and aligned all dependencies with `requirements.txt`.
+- [x] **First-Party Branding Audit & Comprehensive Reference (A16)**: Conducted full repository branding audit (zero occurrences of `MediGenius`, `imon`, `codix`, or `biswas` in project metadata/code). Explicitly documented deliberate preservation of `susham_health.db` default path for database compatibility. Replaced `.env.example` with comprehensive 113-line configuration reference across 8 structured sections.
+- [x] **Architecture & Contributor Reconciled `README.md` (A16)**: Rewrote root `README.md` with accurate ASCII architecture diagrams, clear educational disclaimers, development setup, Docker usage modes, testing commands, and authentic contributor credits (Satyam Gupta, Khagesh Ranjan, Sudipto Ghosh, Ajitesh Baghel, Yuvraj Singh).
+- [x] **Inspected Project Presentation & Report PDFs (A16)**: Inspected tracked project PDFs (`docs/NewGenHealthAI_Project_Presentation.pdf` and `docs/NewGenHealthAI_Final_Project_Report.pdf`); verified both already use `NewGenHealthAI` without legacy strings and preserved them intact.
+- [x] **Comprehensive Phase 4 Regression Suite**: Added 15 new automated tests in `backend/tests/test_phase4_hardening.py` covering voice cancellation, streaming bounds, STT error classification, entrypoints, standalone builds, launcher execution, healthchecks, and `.env.example` coverage (total backend suite: 300/300 passing).
+
 ## Verification Outcomes
 
 | Layer | Check | Tests | Exit Code | Result |
 |---|---|---|---|---|
-| Backend | Pytest (Full 20-module suite including `test_phase3b_voice_security`, `test_phase3a_image_security`, `test_phase2b1_corrections`, `test_phase2b_workflow_safety`, `test_phase2a_image_classifier`, `test_phase1d_concurrency`) | 285 / 285 (0 skipped) | 0 | ✅ Pass (100% passing) |
+| Backend | Pytest (Full 21-module suite including `test_phase4_hardening`, `test_phase3b_voice_security`, `test_phase3a_image_security`, `test_phase2b1_corrections`, `test_phase2b_workflow_safety`, `test_phase2a_image_classifier`, `test_phase1d_concurrency`) | 300 / 300 (0 skipped) | 0 | ✅ Pass (100% passing) |
 | Frontend | Vitest integration (`App.test.jsx`) | 13 / 13 | 0 | ✅ Pass (0 failures) |
 | Frontend | Linter (`npm --prefix frontend run lint`) | 0 errors, 0 warnings | 0 | ✅ Pass (100% clean) |
-| Frontend | Build (`npm --prefix frontend run build`) | Vite bundle | 0 | ✅ Pass |
+| Frontend | Integrated Build (`npm --prefix frontend run build`) | Vite bundle (to `backend/app/static`) | 0 | ✅ Pass |
+| Frontend | Standalone Build (`npm --prefix frontend run build:standalone`) | Vite bundle (to `frontend/dist`) | 0 | ✅ Pass |
 
 ## Database Migration Status
 
@@ -193,5 +208,5 @@
 
 | Phase | Focus Areas | Findings |
 |---|---|---|
-| Phase 4 | Branding cleanup, PDF/documentation corrections, repository/deployment consistency | A16, A12, A13, A14 |
-| Phase 5 | End-to-end multi-user verification gates & Hugging Face Spaces deployment | Production gates |
+| Phase 5 | Premium Healthcare UI/UX Redesign & Modern Design System | Frontend UX & Polish |
+| Phase 6 | End-to-end multi-user verification gates & Hugging Face Spaces deployment | Production gates |

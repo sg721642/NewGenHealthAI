@@ -3,11 +3,11 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "medigenius-backend"
+name = "newgenhealthai-backend"
 version = "3.0.0"
-description = "AI-powered medical assistant backend"
+description = "NewGenHealthAI — Educational and Research Healthcare AI Assistant Backend"
 authors = [
-    {name = "Md. Hasan Imon", email = "codix@example.com"},
+    {name = "Satyam Gupta", email = "sg721642@gmail.com"},
 ]
 requires-python = ">=3.10"
 dependencies = [
@@ -17,26 +17,35 @@ dependencies = [
     "pydantic==2.12.5",
     "pydantic-settings==2.12.0",
     "itsdangerous==2.2.0",
+    "starlette==0.50.0",
+    "argon2-cffi==25.1.0",
     "huggingface-hub==0.36.0",
-    "langchain-core==1.2.6",
+    "langchain-core==1.2.12",
     "langchain-community==0.4.1",
     "langchain-groq==1.1.1",
     "langchain_huggingface==1.2.0",
-    "langgraph==1.0.5",
+    "langgraph==1.1.2",
     "sentence-transformers==5.2.0",
     "chromadb==1.4.0",
     "langchain-chroma==1.1.0",
     "torch==2.9.1",
-    "tensorflow==2.15.0",
+    "torchvision",
+    "numpy",
     "transformers==4.57.3",
-    "sqlalchemy==2.0.45",
+    "timm",
+    "Pillow",
+    "tiktoken==0.12.0",
     "pypdf==6.5.0",
     "wikipedia==1.4.0",
     "duckduckgo-search==8.1.1",
+    "sqlalchemy==2.0.45",
     "python-dotenv==1.2.1",
-    "aiofiles==25.1.0",
+    "aiofiles==0.8.0",
     "httpx==0.28.1",
-    "tiktoken==0.12.0",
+    "edge-tts==6.1.13",
+    "groq==0.37.1",
+    "langid==1.1.6",
+    "tavily-python==0.5.1",
 ]
 
 [project.optional-dependencies]

@@ -26,9 +26,10 @@ class VoicePermit:
         self._released = False
 
     async def release(self):
-        if not self._released:
-            self._released = True
-            await self.manager._release_permit(self.user_id, self.service_type)
+        if self._released:
+            return
+        self._released = True
+        await self.manager._release_permit(self.user_id, self.service_type)
 
     async def __aenter__(self):
         return self
@@ -41,6 +42,7 @@ class VoiceCapacityManager:
     """
     Process-local bounded capacity manager for STT transcriptions and TTS synthesis streams.
     Enforces per-user concurrency isolation and global queue timeouts.
+    Safe against asyncio cancellation during wait or active processing.
     """
     def __init__(
         self,
@@ -66,16 +68,21 @@ class VoiceCapacityManager:
                 )
             self._active_stt_users.add(user_id)
 
+        acquired_semaphore = False
         try:
             try:
                 await asyncio.wait_for(self.stt_semaphore.acquire(), timeout=self.queue_timeout)
+                acquired_semaphore = True
             except asyncio.TimeoutError:
                 logger.warning("Voice STT capacity exhausted (queue timeout %.1fs)", self.queue_timeout)
                 raise HTTPException(
                     status_code=503,
                     detail="Voice transcription service is at maximum capacity. Please retry shortly.",
                 )
-        except Exception:
+        except BaseException:
+            # Safely release semaphore and active-user reservation on cancellation or error
+            if acquired_semaphore:
+                self.stt_semaphore.release()
             async with self._lock:
                 self._active_stt_users.discard(user_id)
             raise
@@ -93,16 +100,21 @@ class VoiceCapacityManager:
                 )
             self._active_tts_users.add(user_id)
 
+        acquired_semaphore = False
         try:
             try:
                 await asyncio.wait_for(self.tts_semaphore.acquire(), timeout=self.queue_timeout)
+                acquired_semaphore = True
             except asyncio.TimeoutError:
                 logger.warning("Voice TTS capacity exhausted (queue timeout %.1fs)", self.queue_timeout)
                 raise HTTPException(
                     status_code=503,
                     detail="Speech synthesis service is at maximum capacity. Please retry shortly.",
                 )
-        except Exception:
+        except BaseException:
+            # Safely release semaphore and active-user reservation on cancellation or error
+            if acquired_semaphore:
+                self.tts_semaphore.release()
             async with self._lock:
                 self._active_tts_users.discard(user_id)
             raise

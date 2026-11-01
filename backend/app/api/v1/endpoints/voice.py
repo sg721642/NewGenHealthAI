@@ -10,7 +10,18 @@ import logging
 from typing import Optional
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
-from groq import AsyncGroq, BadRequestError, AuthenticationError, PermissionDeniedError
+from groq import (
+    AsyncGroq,
+    BadRequestError,
+    AuthenticationError,
+    PermissionDeniedError,
+    NotFoundError,
+    UnprocessableEntityError,
+    RateLimitError,
+    InternalServerError,
+    APITimeoutError,
+    APIConnectionError,
+)
 import edge_tts
 from starlette.responses import StreamingResponse
 import langid
@@ -22,7 +33,9 @@ from app.core.config import (
     STT_REQUEST_TIMEOUT_SECONDS,
     STT_OVERALL_DEADLINE_SECONDS,
     TTS_REQUEST_TIMEOUT_SECONDS,
+    TTS_STREAM_TIMEOUT_SECONDS,
     MAX_TTS_INPUT_CHARS,
+    MAX_TTS_STREAM_BYTES,
 )
 from app.tools.audio_preprocess import (
     validate_and_read_audio_upload,
@@ -124,14 +137,34 @@ async def speech_to_text(
                         if transcription and getattr(transcription, "text", None):
                             logger.info("STT: %s completed successfully", model_name)
                             break
-                    except (BadRequestError, AuthenticationError, PermissionDeniedError) as perm_err:
-                        # Non-retryable error: malformed input or permanent auth failure
+                    except (BadRequestError, AuthenticationError, PermissionDeniedError, NotFoundError, UnprocessableEntityError) as perm_err:
+                        # Non-retryable permanent error: client error, bad request, auth failure
                         logger.error("STT permanent error (%s): %s", model_name, type(perm_err).__name__)
                         break
-                    except Exception as transient_err:
+                    except (RateLimitError, InternalServerError, APITimeoutError, APIConnectionError, asyncio.TimeoutError) as transient_err:
                         # Transient error: rate limit or network glitch, attempt fallback
-                        logger.warning("STT transient error (%s): %s", model_name, type(transient_err).__name__)
+                        logger.warning("STT transient error (%s): %s, attempting fallback", model_name, type(transient_err).__name__)
                         continue
+                    except Exception as other_err:
+                        # Inspect status code or transient message indicators
+                        status_code = getattr(other_err, "status_code", None)
+                        err_str = str(other_err).lower()
+                        is_transient = (
+                            status_code in (429, 500, 502, 503, 504)
+                            or "ratelimit" in err_str
+                            or "rate limit" in err_str
+                            or "429" in err_str
+                            or "timeout" in err_str
+                            or "temporar" in err_str
+                            or "503" in err_str
+                            or "502" in err_str
+                            or "500" in err_str
+                        )
+                        if is_transient:
+                            logger.warning("STT transient error %s (%s), attempting fallback", type(other_err).__name__, model_name)
+                            continue
+                        logger.error("STT non-transient error (%s): %s", model_name, type(other_err).__name__)
+                        break
 
             try:
                 await asyncio.wait_for(_transcribe(), timeout=STT_OVERALL_DEADLINE_SECONDS)
@@ -201,16 +234,40 @@ async def text_to_speech(
         raise HTTPException(status_code=500, detail="Text-to-speech synthesis failed")
 
     async def audio_stream_generator():
+        total_bytes = 0
+        loop = asyncio.get_event_loop()
+        start_time = loop.time()
         try:
-            async for chunk in communicate.stream():
+            stream_iter = communicate.stream()
+            while True:
+                elapsed = loop.time() - start_time
+                remaining_time = TTS_STREAM_TIMEOUT_SECONDS - elapsed
+                if remaining_time <= 0:
+                    logger.error("TTS streaming exceeded timeout (limit=%.1fs)", TTS_STREAM_TIMEOUT_SECONDS)
+                    break
+
+                chunk_timeout = min(remaining_time, TTS_REQUEST_TIMEOUT_SECONDS)
+                try:
+                    chunk = await asyncio.wait_for(stream_iter.__anext__(), timeout=chunk_timeout)
+                except StopAsyncIteration:
+                    break
+                except asyncio.TimeoutError:
+                    logger.error("TTS stream chunk timed out (remaining=%.1fs)", remaining_time)
+                    break
+
                 if chunk.get("type") == "audio":
-                    yield chunk["data"]
+                    data = chunk["data"]
+                    total_bytes += len(data)
+                    if total_bytes > MAX_TTS_STREAM_BYTES:
+                        logger.error("TTS stream exceeded byte limit (total=%d, limit=%d)", total_bytes, MAX_TTS_STREAM_BYTES)
+                        break
+                    yield data
         except (asyncio.CancelledError, GeneratorExit):
             logger.info("TTS streaming disconnected by client")
             raise
         except Exception as e:
             logger.error("TTS stream chunk error: %s", type(e).__name__)
-            raise
+            return
         finally:
             await permit.release()
 
