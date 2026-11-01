@@ -18,7 +18,7 @@
 | Phase 2B commit | `0995690914b44fe496c2277c1e56181fac82a52c` |
 | Phase 2B.1 commit | `01a574a470edc880c99b6742b2bf0ae65b1ab4ec` |
 | Phase 3A commit | `5a4427f2c34e24a7bd189b1e8b6e5c143dde6454` |
-| Phase 3B commit | Pending commit |
+| Phase 3B commit | `489599920066189665c1798de09488a398d3d947` |
 
 | Current phase | Phase 3B — Secure Voice Processing, Reliable STT/TTS and Resource Protection |
 | Next phase | Phase 4 — branding cleanup, PDF/documentation corrections and repository/deployment consistency |
