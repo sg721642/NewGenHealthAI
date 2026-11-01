@@ -331,6 +331,24 @@ If enough information gathered:
 
         parsed = _extract_json(answer) if answer else None
 
+        if not parsed and answer and "?" in answer:
+            # LLM replied conversationally with a follow-up question
+            lines = [l.strip() for l in answer.strip().split("\n") if l.strip()]
+            q_candidates = [l for l in lines if "?" in l]
+            q_text = q_candidates[-1] if q_candidates else answer.strip()
+            q_text = re.sub(r"^[*#\s\d.-]+", "", q_text).strip()
+            ack_lines = [l for l in lines if l != q_text and "?" not in l]
+            ack_text = " ".join(ack_lines)[:250] if ack_lines else "Thank you for sharing that context. Let's gather a bit more detail."
+            
+            fb = _get_fallback_triage_question(triage_round, question, collected, questions_asked)
+            default_options = fb.get("options", ["Less than 24 hours", "1–3 days", "4–7 days", "More than a week"]) if fb else ["Less than 24 hours", "1–3 days", "4–7 days", "More than a week"]
+            parsed = {
+                "status": "needs_info",
+                "acknowledgment": ack_text,
+                "question_text": q_text,
+                "options": default_options,
+            }
+
         if not parsed:
             logger.warning("Triage: couldn't parse JSON — defaulting to ready_to_diagnose")
             state["triage_status"] = "ready_to_diagnose"

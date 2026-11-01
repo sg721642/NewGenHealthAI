@@ -280,6 +280,7 @@ def check_emergency_followup(text: str, conversation_history: List[Dict[str, Any
         return None
 
     # Check if any recent turn (within last 3 assistant turns) was an acute emergency alert
+    had_emergency = False
     for item in reversed(conversation_history[-4:]):
         if item.get("role") == "assistant":
             content = item.get("content", "")
