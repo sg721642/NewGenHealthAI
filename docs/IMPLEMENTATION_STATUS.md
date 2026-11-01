@@ -14,7 +14,7 @@
 | Phase 1C commit | `bbeb67c5eb1e4e728b4d8ad5632f656b9e8e125a` |
 | Phase 1C.1 commit | `d4bc0c14a699b3a37fae0b38839b7ba944503d04` |
 | Phase 1D commit | `256c86d649d0dd67c916892664d7f41d7919fabc` |
-| Phase 2A commit | Pending verification & push |
+| Phase 2A commit | `b67abedd2a69b141e450372099c186ca73e48bd6` |
 
 | Current phase | Phase 2A — Critical Image-Classification Correctness and Safe Inference |
 
