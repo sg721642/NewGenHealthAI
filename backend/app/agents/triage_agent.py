@@ -89,6 +89,10 @@ def TriageAgent(state: AgentState) -> AgentState:
         logger.info("Triage: non-medical query — skipping")
         return state
 
+    if state.get("triage_status") == "ready_to_diagnose":
+        logger.info("Triage: general educational query — bypassing symptom intake")
+        return state
+
     raw_question = state.get("question", "")
     question = raw_question.strip() if isinstance(raw_question, str) else ""
 

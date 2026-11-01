@@ -1,0 +1,17 @@
+.git
+.github
+.venv
+venv
+env
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+*.db
+*.sqlite3
+backend/storage/chat_db/*
+backend/logs/*
+frontend/node_modules
+.DS_Store
+**/.DS_Store
