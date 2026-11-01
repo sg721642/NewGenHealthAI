@@ -125,6 +125,17 @@ Phase 1D implemented generational versioning (`_versions`) and deletion tombston
 - Authored step-by-step reversible deployment procedure prioritizing non-destructive Git-based rollback (`git read-tree -u --reset dadb57ad...` with forward commit) and verified point-in-time data restoration, retaining force-push strictly as an emergency fallback.
 - Reconfirmed that zero pushes to external spaces were performed under the strict ₹0 budget constraint.
 
+### 7. Critical Security Finding: Public Space Variables to Private Space Secrets Migration
+- Inspection revealed that `SESSION_SECRET_KEY`, `GROQ_API_KEY`, and `TAVILY_API_KEY` were previously configured in the public **Space Variables** section of `sg721642/NewGenHealthAI` rather than **Space Secrets**.
+- On public Hugging Face Spaces, Space Variables are accessible to public inspection, whereas Space Secrets are encrypted at rest and accessible only to the running container.
+- These credentials were immediately classified as **POTENTIALLY COMPROMISED**.
+- Remediation Plan:
+  1. Revoke and rotate `GROQ_API_KEY` via Groq Console ([https://console.groq.com/keys](https://console.groq.com/keys)).
+  2. Revoke and rotate `TAVILY_API_KEY` via Tavily Dashboard ([https://app.tavily.com/home](https://app.tavily.com/home)).
+  3. Generate fresh 256-bit cryptographically secure `SESSION_SECRET_KEY` via `secrets.token_hex(32)`.
+  4. Migrate all three keys to Hugging Face Space Secrets and purge the public Space Variables.
+- Execution Boundary: Changing Space settings triggers an immediate container reboot, destroying the ephemeral SQLite database. Action is held pending explicit owner data-reset authorization.
+
 ## A16 Preservation Notes
 
 The following legacy identifiers were intentionally preserved for database compatibility:

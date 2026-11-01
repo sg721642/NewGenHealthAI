@@ -558,14 +558,20 @@ Authoritative technical preparation for future explicitly authorized deployment 
 - **SQLite WAL on Cloud Mounts**: Attaching network object storage (such as S3 or GCS buckets) does not provide POSIX `fcntl` locking or `.shm` shared memory mapping, leading to SQLite WAL corruption.
 - **Deployment Status**: **Public persistent-user deployment is BLOCKED** from offering durable data retention until dedicated persistent block storage or a managed relational database (e.g., PostgreSQL) is attached. For evaluation purposes, the Space operates safely with an ephemeral database seeded on startup.
 
-### 3. Required Environment Variables & Secrets
-The target Space requires the following repository variables/secrets configured in **Space Settings → Secrets**:
-- `SESSION_SECRET_KEY`: **Required** (minimum 32 characters, used for Starlette session cookie signing; production mode fails startup if absent or too short).
-- `GROQ_API_KEY`: **Required for live LLM** (used for Groq clinical reasoning and Whisper STT).
+### 3. Required Environment Variables & Secrets (CRITICAL: Space Secrets vs Variables)
+> [!WARNING]
+> **Strict Space Secrets Enforcement**: All confidential tokens (`SESSION_SECRET_KEY`, `GROQ_API_KEY`, `TAVILY_API_KEY`) must **strictly be stored as Space Secrets** (`Space Settings → Secrets`), NEVER as public Space Variables. Space Variables on public Spaces are exposed to public inspection. Any credentials previously stored as Space Variables are classified as potentially compromised and must be rotated at their source providers.
+
+The target Space requires the following repository settings configured in **Space Settings → Secrets**:
+- `SESSION_SECRET_KEY`: **Required Space Secret** (minimum 32 characters, used for Starlette session cookie signing; production mode fails startup if absent or too short; rotate with freshly generated 256-bit random value).
+- `GROQ_API_KEY`: **Required Space Secret for live LLM** (used for Groq clinical reasoning and Whisper STT; rotate via Groq Console).
+- `TAVILY_API_KEY`: **Optional Space Secret** (used for medical search; rotate via Tavily Dashboard).
+
+Public configuration (safe as Space Variables or container env):
 - `ALLOWED_ORIGINS`: Optional/Recommended (set to `https://sg721642-newgenhealthai.hf.space,http://localhost:7860`).
 - `TRUSTED_PROXIES`: Optional/Recommended (set to `127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12` to handle Hugging Face reverse proxy headers safely).
 - `ALLOW_MODEL_DOWNLOADS`: Set to `false` to guarantee deterministic, fast container boot without network timeout.
-- *Secret Values Status*: Secret values must never be checked into Git or printed in CI logs. They are managed exclusively through Hugging Face's secure web UI.
+- *Secret Values Status*: Secret values must never be checked into Git, printed in terminal logs, or exposed in CI logs. They are managed exclusively through Hugging Face's secure web UI or authenticated API.
 
 ### 4. Database Schema Compatibility & Migration
 If a database file were retained or mounted:
