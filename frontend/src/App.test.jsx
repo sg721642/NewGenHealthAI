@@ -395,5 +395,205 @@ describe('App Integration', () => {
             configurable: true,
         });
     });
-});
 
+    it('toggles light and dark themes and updates document attributes', async () => {
+        render(<App />);
+
+        const themeToggle = screen.getByTitle(/Switch to (light|dark) mode/i);
+        expect(themeToggle).toBeInTheDocument();
+
+        // Initial theme is dark from beforeEach
+        expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
+
+        fireEvent.click(themeToggle);
+        expect(document.documentElement.getAttribute('data-theme')).toBe('light');
+        expect(localStorage.getItem('theme')).toBe('light');
+
+        fireEvent.click(themeToggle);
+        expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
+        expect(localStorage.getItem('theme')).toBe('dark');
+    });
+
+    it('filters session list based on search term', async () => {
+        const mockSessions = [
+            { session_id: '1', preview: 'Flu symptoms and fever', last_active: '2023' },
+            { session_id: '2', preview: 'Cardiology palpitations', last_active: '2023' },
+            { session_id: '3', preview: 'Headache migraine advice', last_active: '2023' },
+            { session_id: '4', preview: 'Skin rash inspection', last_active: '2023' }
+        ];
+
+        mockFetch.mockImplementation((url) => {
+            if (url === '/api/v1/sessions') {
+                return Promise.resolve({
+                    json: () => Promise.resolve({ success: true, sessions: mockSessions }),
+                    ok: true
+                });
+            }
+            return Promise.resolve({ json: () => Promise.resolve({ success: true }), ok: true });
+        });
+
+        render(<App />);
+
+        await waitFor(() => {
+            expect(screen.getByText('Flu symptoms and fever')).toBeInTheDocument();
+            expect(screen.getByText('Cardiology palpitations')).toBeInTheDocument();
+        });
+
+        const searchInput = screen.getByPlaceholderText('Filter consultations...');
+        fireEvent.change(searchInput, { target: { value: 'Cardio' } });
+
+        expect(screen.getByText('Cardiology palpitations')).toBeInTheDocument();
+        expect(screen.queryByText('Flu symptoms and fever')).not.toBeInTheDocument();
+    });
+
+    it('opens confirmation modal on delete session and cancels cleanly', async () => {
+        const mockSessions = [
+            { session_id: 'sess-delete-1', preview: 'Routine checkup consult', last_active: '2023' }
+        ];
+
+        mockFetch.mockImplementation((url) => {
+            if (url === '/api/v1/sessions') {
+                return Promise.resolve({
+                    json: () => Promise.resolve({ success: true, sessions: mockSessions }),
+                    ok: true
+                });
+            }
+            return Promise.resolve({ json: () => Promise.resolve({ success: true }), ok: true });
+        });
+
+        render(<App />);
+
+        await waitFor(() => {
+            expect(screen.getByText('Routine checkup consult')).toBeInTheDocument();
+        });
+
+        const deleteBtn = screen.getByTitle('Delete consultation');
+        fireEvent.click(deleteBtn);
+
+        // Confirmation modal is visible
+        expect(screen.getByText('Delete Consultation?')).toBeInTheDocument();
+        expect(screen.getByText(/permanently delete this consultation history/i)).toBeInTheDocument();
+
+        // Cancel modal
+        const cancelBtn = screen.getByText('Cancel');
+        fireEvent.click(cancelBtn);
+
+        await waitFor(() => {
+            expect(screen.queryByText('Delete Consultation?')).not.toBeInTheDocument();
+            expect(screen.getByText('Routine checkup consult')).toBeInTheDocument();
+        });
+    });
+
+    it('submits query when clicking quick question starter card', async () => {
+        mockFetch.mockImplementation((url) => {
+            if (url === '/api/v1/chat') {
+                return Promise.resolve({
+                    json: () => Promise.resolve({
+                        success: true,
+                        response: 'Tension headaches can often be managed with rest and hydration.',
+                        source: 'clinical-kb',
+                        timestamp: 'now'
+                    }),
+                    ok: true
+                });
+            }
+            return Promise.resolve({ json: () => Promise.resolve({ success: true, sessions: [] }), ok: true });
+        });
+
+        render(<App />);
+
+        const starterCard = screen.getByText('How can I safely manage a tension headache at home?');
+        expect(starterCard).toBeInTheDocument();
+
+        fireEvent.click(starterCard);
+
+        await waitFor(() => {
+            expect(mockFetch).toHaveBeenCalledWith(
+                '/api/v1/chat',
+                expect.objectContaining({
+                    body: expect.stringContaining('How can I safely manage a tension headache at home?')
+                })
+            );
+            expect(screen.getByText(/managed with rest and hydration/)).toBeInTheDocument();
+        });
+    });
+
+    it('toggles password visibility on AuthPage', async () => {
+        localStorage.clear();
+        render(<App />);
+
+        expect(screen.getByText('Welcome Back')).toBeInTheDocument();
+        const passwordInput = screen.getByPlaceholderText('Enter your password');
+        expect(passwordInput).toHaveAttribute('type', 'password');
+
+        const eyeToggleBtn = screen.getByTitle('Show password');
+        fireEvent.click(eyeToggleBtn);
+
+        expect(passwordInput).toHaveAttribute('type', 'text');
+
+        const hideToggleBtn = screen.getByTitle('Hide password');
+        fireEvent.click(hideToggleBtn);
+
+        expect(passwordInput).toHaveAttribute('type', 'password');
+    });
+
+    it('dispatches message when follow-up choice chip is clicked', async () => {
+        let chatCallCount = 0;
+        mockFetch.mockImplementation((url) => {
+            if (url === '/api/v1/chat') {
+                chatCallCount++;
+                if (chatCallCount === 1) {
+                    return Promise.resolve({
+                        json: () => Promise.resolve({
+                            success: true,
+                            response: 'How long have you had this cough?',
+                            follow_up: {
+                                round: 1,
+                                questions: [
+                                    {
+                                        text: 'Duration of cough',
+                                        options: ['Less than 3 days', 'More than 2 weeks']
+                                    }
+                                ]
+                            },
+                            source: 'clinical-triage',
+                            timestamp: 'now'
+                        }),
+                        ok: true
+                    });
+                }
+                return Promise.resolve({
+                    json: () => Promise.resolve({
+                        success: true,
+                        response: 'Noted. For a cough lasting over 2 weeks, clinical evaluation is advised.',
+                        source: 'clinical-triage',
+                        timestamp: 'now'
+                    }),
+                    ok: true
+                });
+            }
+            return Promise.resolve({ json: () => Promise.resolve({ success: true, sessions: [] }), ok: true });
+        });
+
+        render(<App />);
+
+        const input = screen.getByPlaceholderText('Describe your symptoms or ask a medical question…');
+        const sendBtn = screen.getByRole('button', { name: /Send message/i });
+
+        fireEvent.change(input, { target: { value: 'I have a dry cough' } });
+        fireEvent.click(sendBtn);
+
+        await waitFor(() => {
+            expect(screen.getByText('Less than 3 days')).toBeInTheDocument();
+            expect(screen.getByText('More than 2 weeks')).toBeInTheDocument();
+        });
+
+        const chipBtn = screen.getByText('More than 2 weeks');
+        fireEvent.click(chipBtn);
+
+        await waitFor(() => {
+            expect(chatCallCount).toBe(2);
+            expect(screen.getByText(/cough lasting over 2 weeks/)).toBeInTheDocument();
+        });
+    });
+});
