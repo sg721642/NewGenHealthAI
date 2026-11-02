@@ -42,6 +42,21 @@ MEDICAL_KEYWORDS = [
     "mild", "moderate", "severe", "throbbing", "sharp", "dull",
     "chronic", "recurring", "worse", "better", "days", "weeks", "hours",
     "yesterday", "today", "constant", "intermittent", "gradual", "sudden",
+    # Indian / Hindi / Hinglish symptom terms
+    "bukhar", "tapman", "thand", "kapkapi", "paseena",
+    "dard", "sardard", "sirdard", "badan dard", "kamar dard", "pet dard", "gale me", "chhati me",
+    "khasi", "khansi", "balgham", "sukhi khansi", "zukam", "jukam", "nazla", "chheenke", "gala kharab",
+    "saans", "sans", "dam", "ghutan", "saans phoolna", "sans phool", "saans lene me",
+    "ulti", "matli", "chakkar", "kamzori", "thakan", "behosh",
+    "dast", "loose motion", "pet kharab", "gas", "kabz", "marod",
+    "khujli", "daane", "chakatte", "jalan", "sujan", "chhale", "phoda", "funsi",
+    "chot", "zakhm", "khoon", "bimar", "bimari", "tabiyat", "tabiat",
+    "aspatal", "ilaaj", "dawa", "dawai", "goli", "daktar", "chikitsak",
+    "sick", "ill", "not feeling well", "unwell", "feverish",
+    # Devanagari Hindi medical terms
+    "बुखार", "तापमान", "ठंड", "दर्द", "सिरदर्द", "खांसी", "जुकाम", "नजला",
+    "सांस", "दम", "उल्टी", "मतली", "दस्त", "चक्कर", "कमजोरी", "थकान",
+    "खुजली", "दाने", "सूजन", "जलन", "चोट", "जख्म", "खून", "बीमार", "तबीयत", "दवा", "दवाई",
 ]
 
 GENERAL_KNOWLEDGE_PATTERNS = [
