@@ -45,8 +45,8 @@ MEDICAL_KEYWORDS = [
 ]
 
 GENERAL_KNOWLEDGE_PATTERNS = [
-    re.compile(r"^(?:what\s+(?:is|are)|explain|tell\s+me\s+about|define|how\s+does|how\s+do|causes?\s+of)\b", re.IGNORECASE),
-    re.compile(r"\b(?:what\s+(?:is|are)|difference\s+between|overview\s+of)\b", re.IGNORECASE),
+    re.compile(r"^(?:what\s+(?:is|are|causes?)|explain|tell\s+me\s+about|define|how\s+does|how\s+do|causes?\s+of|information\s+about|info\s+(?:about|on))\b", re.IGNORECASE),
+    re.compile(r"\b(?:what\s+(?:is|are|causes?)|difference\s+between|overview\s+of|information\s+about)\b", re.IGNORECASE),
 ]
 
 

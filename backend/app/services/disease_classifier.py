@@ -267,20 +267,6 @@ def detect_visual_domain(image: Image.Image) -> tuple:
             f"scores={scores}"
         )
 
-        # ── SECONDARY VALIDATION ──
-        if best_domain == "non_medical" and best_conf < 0.45:
-            medical_sum = sum(
-                float(probs[i]) for i in range(4)  # skin + xray + retina + general
-            )
-            if medical_sum > 0.55:
-                medical_probs = {CLIP_DOMAIN_MAP[i]: float(probs[i]) for i in range(4)}
-                best_medical = max(medical_probs, key=medical_probs.get)
-                logger.info(
-                    f"CLIP secondary validation: overriding non_medical -> {best_medical} "
-                    f"(medical_sum={medical_sum:.3f})"
-                )
-                return best_medical, medical_probs[best_medical], scores
-
         if best_conf < 0.30:
             logger.info("CLIP domain detection confidence below threshold (%.3f); marking ambiguous", best_conf)
             return "ambiguous", best_conf, scores
@@ -481,6 +467,7 @@ class MedicalModel:
         self.device = device
         self.classes = []
         self.model = None
+        self.arch = None
         self.input_size = 224
         self._transform = None
 
@@ -544,6 +531,7 @@ class MedicalModel:
                 logger.info(f"[{self.model_name}] Image size from metadata: {self.input_size}")
 
             arch = _detect_architecture(state_dict.keys())
+            self.arch = arch
             logger.info(f"[{self.model_name}] Detected architecture: {arch}")
 
             if arch == "unknown":
@@ -1105,9 +1093,9 @@ class DiseaseClassifier:
         domain, domain_conf, domain_scores = detect_visual_domain(image)
         logger.info(f"CLIP domain detection: {domain} (conf={domain_conf:.3f})")
 
-        # Fallback to visual feature detection ONLY for non-medical detection when CLIP is unavailable
+        # Fallback to visual feature detection for non-medical detection when CLIP is ambiguous or unavailable
         vf_is_non_medical = False
-        if domain in ("unknown", "ambiguous") and domain_scores.get("error"):
+        if domain in ("unknown", "ambiguous"):
             vf_domain, vf_conf, vf_scores = detect_domain_from_visual_features(image)
             if vf_domain == "non_medical" and vf_conf >= 0.70:
                 domain = "non_medical"
@@ -1123,6 +1111,7 @@ class DiseaseClassifier:
                 "status": "unsupported_image",
                 "message": "The uploaded image does not appear to be a supported medical image.",
                 "category": "non_medical",
+                "modality_source": "auto_detected",
                 "disease": None,
                 "score": 0.0,
                 "confidence": 0.0,
@@ -1136,15 +1125,18 @@ class DiseaseClassifier:
 
         # ── 2. Determine target modality with routed_category validation ──
         target_category = domain
+        modality_source = "auto_detected"
         if routed_category:
             routed_clean = routed_category.lower().strip()
             if routed_clean in ("skin", "xray", "retina", "general"):
+                modality_source = "user_selected"
                 if domain == "non_medical":
                     logger.info("Non-medical image detected despite routed category override '%s'", routed_clean)
                     return {
                         "status": "unsupported_image",
-                        "message": "Uploaded image appears non-medical; user-requested modality override rejected.",
+                        "message": f"Uploaded image does not appear to be a supported medical image; user-selected modality '{routed_clean}' does not match visual content.",
                         "category": "non_medical",
+                        "modality_source": "user_selected",
                         "disease": None,
                         "score": 0.0,
                         "confidence": 0.0,
@@ -1164,6 +1156,7 @@ class DiseaseClassifier:
                 "status": "inconclusive",
                 "message": "Image modality could not be reliably determined from visual features. Please select a specific modality or upload a clearer clinical image.",
                 "category": target_category,
+                "modality_source": modality_source,
                 "disease": None,
                 "score": 0.0,
                 "confidence": 0.0,
@@ -1198,6 +1191,7 @@ class DiseaseClassifier:
                     "model is currently unavailable on this server. No disease classification was performed."
                 ),
                 "category": target_category,
+                "modality_source": modality_source,
                 "disease": None,
                 "score": 0.0,
                 "confidence": 0.0,
@@ -1207,6 +1201,8 @@ class DiseaseClassifier:
                 "domain_scores": domain_scores,
                 "domain_confidence": round(domain_conf, 4),
                 "predictions": [],
+                "symptom_interview_suggested": True,
+                "follow_up_prompt": f"Would you like to describe your symptoms or clinical history related to this {cat_display} condition in the chat for educational intake guidance?",
             }
 
         # ── 4. Execute ONLY the matching specialist model ──
@@ -1219,6 +1215,7 @@ class DiseaseClassifier:
                 "status": "inconclusive",
                 "message": f"An error occurred during {target_category} model inference.",
                 "category": target_category,
+                "modality_source": modality_source,
                 "disease": None,
                 "score": 0.0,
                 "confidence": 0.0,
@@ -1234,6 +1231,7 @@ class DiseaseClassifier:
         # ── 5. Safe, uncalibrated prediction interpretation ──
         interp = self._interpret_predictions(target_category, preds, raw_conf)
         interp["category"] = target_category
+        interp["modality_source"] = modality_source
         interp["domain_hint"] = domain
         interp["domain_scores"] = domain_scores
         interp["domain_confidence"] = round(domain_conf, 4)

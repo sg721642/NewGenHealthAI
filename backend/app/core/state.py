@@ -28,13 +28,14 @@ class AgentState(TypedDict):
     current_tool: Optional[str]
     retry_count: int
 
-    # ── Clinical Triage (Follow-Up Questions) ──────────────────────
+    # ── Clinical Triage (Follow-Up Questions & Fact Store) ─────────
     triage_status: Optional[str]        # "needs_info" | "ready_to_diagnose" | "urgent_risk" | None
     triage_round: int                   # how many Q&A rounds so far (max 3)
     collected_symptoms: List[str]       # accumulated patient details across turns
     questions_asked: List[str]          # exact questions already asked (to avoid repeats)
     follow_up_data: Optional[Dict[str, Any]]  # structured follow-up for frontend chips
     pending_follow_up_data: Optional[Dict[str, Any]]  # active follow-up contract from previous turn
+    clinical_facts: Dict[str, Any]      # structured clinical fact store across turns
     is_medical_query: bool              # whether planner flagged this as medical
 
     # ── Phase 2B: Urgent Risk & Bounded Workflow Safeguards ─────────
@@ -74,6 +75,7 @@ def initialize_conversation_state() -> AgentState:
         "questions_asked": [],
         "follow_up_data": None,
         "pending_follow_up_data": None,
+        "clinical_facts": {},
         "is_medical_query": False,
         # Phase 2B Safeguards
         "is_urgent": False,
@@ -88,9 +90,10 @@ def initialize_conversation_state() -> AgentState:
 
 
 def reset_query_state(state: AgentState) -> AgentState:
-    """Reset per-query flags while preserving conversation history and triage context."""
+    """Reset per-query flags while preserving conversation history, clinical facts, and triage context."""
     # Preserve prior turn's follow_up_data as pending_follow_up_data so triage can validate user's reply
     pending_follow_up = state.get("follow_up_data") or state.get("pending_follow_up_data")
+    facts = state.get("clinical_facts", {})
     state.update(
         {
             "question": "",
@@ -108,11 +111,12 @@ def reset_query_state(state: AgentState) -> AgentState:
             "tavily_success": False,
             "current_tool": None,
             "retry_count": 0,
-            # Keep triage_round and collected_symptoms across turns!
+            # Keep triage_round, collected_symptoms, and clinical_facts across turns!
             # Preserve pending follow-up question/options contract
             "triage_status": None,
             "follow_up_data": None,
             "pending_follow_up_data": pending_follow_up,
+            "clinical_facts": facts,
             # Reset per-query Phase 2B flags
             "is_urgent": False,
             "urgent_advisory": None,
