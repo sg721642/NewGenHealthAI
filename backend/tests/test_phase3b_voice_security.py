@@ -539,6 +539,11 @@ def test_lightweight_import_smoke_test_disease_classifier_clarification():
     so lazy model loading refers to model weights (.pth files) loaded on demand,
     rather than zero-dependency lightweight module imports.
     """
+    import subprocess
     import sys
-    # Check that app.core.config is lightweight and does NOT import torch
-    assert "torch" not in sys.modules or sys.modules["torch"] is None or isinstance(sys.modules["torch"], MagicMock)
+    # Verify in a clean process that app.core.config is lightweight and does NOT import torch
+    res = subprocess.run(
+        [sys.executable, "-c", "import app.core.config; import sys; assert 'torch' not in sys.modules"],
+        capture_output=True,
+    )
+    assert res.returncode == 0

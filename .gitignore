@@ -55,4 +55,5 @@ backend/test_images/
 # Local planning and reference artifacts
 NewGenHealthAI_Antigravity_Master_Plan.md
 node_modules/
+scratch/
 

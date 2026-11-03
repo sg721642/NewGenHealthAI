@@ -179,8 +179,11 @@ def get_medical_info(
     if finding_type == "anatomy_identified":
         return {
             "raw": (
-                "The model identified an anatomical location. "
-                "No disease pathology or fracture was classified for this image."
+                "The model identified the anatomical location. "
+                "No disease pathology or fracture was classified for this image. "
+                "Pathology, fracture presence, or internal skeletal abnormalities cannot be reliably determined by this prototype model. "
+                "Anatomical classification does NOT establish that no fracture or abnormality exists. "
+                "Formal clinical radiographic evaluation by a qualified physician or radiologist is required."
             )
         }
     if not disease_name or disease_name.lower().strip() in ("none", "unknown", "inconclusive"):
@@ -466,7 +469,10 @@ async def analyze_image(
             elif finding_type == "anatomy_identified":
                 medical_details = (
                     "The model identified the anatomical location. "
-                    "No disease pathology or fracture was classified for this image."
+                    "No disease pathology or fracture was classified for this image. "
+                    "Pathology, fracture presence, or internal skeletal abnormalities cannot be reliably determined by this prototype model. "
+                    "Anatomical classification does NOT establish that no fracture or abnormality exists. "
+                    "Formal clinical radiographic evaluation by a qualified physician or radiologist is required."
                 )
 
             response_body = {

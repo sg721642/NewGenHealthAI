@@ -19,8 +19,16 @@ Detected architectures (from inspect_models.py):
 """
 
 import os
+import hashlib
 import threading
 from typing import Dict, Optional, Tuple
+
+TRUSTED_CHECKPOINT_HASHES = {
+    "skin_disease_model.pth": "0bc3877c6ece5c9b72b59f174403874d73cd3204dc4ed2f38edd9b2be5ed61fe",
+    "xray_fracture_model.pth": "ed146630d81fa37dc44f45f72cb80cc8b7f7aa3628bcee92c555bd4061580937",
+    "retina_model.pth": "b5510938daea44433589fabe98ba7c5069ceb8a18dea0ebab68c861258e28862",
+    "general_disease_model.pth": "adcdb81092710787de6dbf382b8e6432e5f279237667b67ef88b0a81a191f7cc",
+}
 
 import numpy as np
 
@@ -164,8 +172,9 @@ def _get_clip():
 def detect_domain_from_visual_features(img: Image.Image) -> tuple:
     """
     High-speed deterministic visual domain detector based on color space analysis,
-    aperture ratios, and skin chrominance loci. Provides pure offline domain detection
-    (<10ms) without external network or heavy neural weights.
+    aperture ratios, and inclusive skin chrominance loci (ITU-R BT.601 YCbCr model across
+    Fitzpatrick I through VI). Provides pure offline domain detection (<10ms) without
+    heavy external weights.
     Returns: (domain_name: str, confidence: float, all_scores: dict)
     """
     try:
@@ -200,32 +209,43 @@ def detect_domain_from_visual_features(img: Image.Image) -> tuple:
             conf = 0.88
             return "retina", conf, {"retina": conf, "corner_b": corner_brightness, "center_b": center_brightness}
 
-        # 4. Skin lesion check: Kovac skin color model
+        # 4. Obvious nature / landscape / outdoor non-medical checks:
+        green_mask = (g > r * 1.15) & (g > b * 1.15) & (g > 60)
+        green_ratio = float(np.mean(green_mask))
+
+        blue_mask = (b > r * 1.25) & (b > g * 1.15) & (b > 90)
+        blue_ratio = float(np.mean(blue_mask))
+
+        if green_ratio > 0.20 or blue_ratio > 0.25:
+            return "non_medical", 0.85, {"non_medical": 0.85, "green": green_ratio, "blue": blue_ratio}
+
+        # 5. Inclusive human skin chrominance (ITU-R BT.601 YCbCr model across Fitzpatrick I to VI):
+        # Y = 0.299 R + 0.587 G + 0.114 B
+        # Cb = 128 - 0.168736 R - 0.331264 G + 0.5 B
+        # Cr = 128 + 0.5 R - 0.418688 G - 0.081312 B
+        y_plane = 0.299 * r + 0.587 * g + 0.114 * b
+        cb_plane = 128.0 - 0.168736 * r - 0.331264 * g + 0.5 * b
+        cr_plane = 128.0 + 0.5 * r - 0.418688 * g - 0.081312 * b
+
+        # Accommodates luminance down to Y >= 20 for deeply pigmented skin (Fitzpatrick VI)
+        # while respecting skin chrominance locus Cr in [130, 185], Cb in [75, 140]
         skin_mask = (
-            (r > 80) & (g > 35) & (b > 15) &
-            ((np.maximum(r, np.maximum(g, b)) - np.minimum(r, np.minimum(g, b))) > 15) &
-            (np.abs(r - g) > 12) & (r > g) & (r > b)
+            (y_plane >= 20.0) & (y_plane <= 250.0) &
+            (cr_plane >= 130.0) & (cr_plane <= 185.0) &
+            (cb_plane >= 75.0) & (cb_plane <= 140.0) &
+            (r >= b - 5.0)
         )
         skin_ratio = float(np.mean(skin_mask))
 
-        # Nature / outdoor / non-medical checks:
-        green_mask = (g > r * 1.1) & (g > b * 1.1) & (g > 50)
-        green_ratio = float(np.mean(green_mask))
+        # Do not make dogmatic binary confidence claims; report honest heuristic probabilities
+        if skin_ratio >= 0.30:
+            return "skin", 0.65, {"skin": 0.65, "skin_ratio": skin_ratio, "ycbcr_inclusive": True}
 
-        blue_mask = (b > r * 1.2) & (b > g * 1.1) & (b > 80)
-        blue_ratio = float(np.mean(blue_mask))
+        # If skin-like pixels are moderate or uncertain, return ambiguous rather than false non_medical
+        if skin_ratio >= 0.10:
+            return "ambiguous", 0.45, {"ambiguous": 0.45, "skin_ratio": skin_ratio}
 
-        if green_ratio > 0.15 or blue_ratio > 0.20:
-            return "non_medical", 0.85, {"non_medical": 0.85, "green": green_ratio, "blue": blue_ratio}
-
-        if skin_ratio >= 0.35:
-            conf = min(0.95, 0.60 + skin_ratio * 0.35)
-            return "skin", conf, {"skin": conf, "skin_ratio": skin_ratio}
-
-        if skin_ratio < 0.15 and (green_ratio > 0.05 or blue_ratio > 0.05 or mean_chroma > 50.0):
-            return "non_medical", 0.80, {"non_medical": 0.80, "skin_ratio": skin_ratio}
-
-        return "general", 0.50, {"general": 0.50, "skin_ratio": skin_ratio}
+        return "ambiguous", 0.35, {"ambiguous": 0.35, "skin_ratio": skin_ratio}
     except Exception as e:
         logger.warning("Visual feature detection error: %s", type(e).__name__)
         return "unknown", 0.0, {"error": str(e)}
@@ -485,13 +505,33 @@ class MedicalModel:
         return self._transform
 
     def load(self):
-        """Load class labels and model weights, auto-detecting architecture."""
+        """Load class labels and model weights, verifying SHA-256 integrity and safe weights-only loading."""
         if not os.path.exists(self.model_path):
             logger.warning(f"[{self.model_name}] Model weights artifact missing")
             return False
         if not os.path.exists(self.class_path):
             logger.warning(f"[{self.model_name}] Class label definition missing")
             return False
+
+        # Security Pre-flight: verify checkpoint SHA-256 hash against pinned trusted hashes
+        base_name = os.path.basename(self.model_path)
+        expected_sha = TRUSTED_CHECKPOINT_HASHES.get(base_name)
+        if expected_sha:
+            hasher = hashlib.sha256()
+            try:
+                with open(self.model_path, "rb") as f:
+                    while chunk := f.read(65536):
+                        hasher.update(chunk)
+                actual_sha = hasher.hexdigest().lower()
+                if actual_sha != expected_sha.lower():
+                    logger.error(
+                        f"[{self.model_name}] Checkpoint hash mismatch! Expected {expected_sha}, got {actual_sha}. Loading aborted for security."
+                    )
+                    return False
+                logger.info(f"[{self.model_name}] Cryptographic integrity verified: {expected_sha[:16]}...")
+            except Exception as e:
+                logger.error(f"[{self.model_name}] Failed to verify file integrity hash: {type(e).__name__}")
+                return False
 
         try:
             self.classes = _parse_class_file(self.class_path)
@@ -501,17 +541,12 @@ class MedicalModel:
                 return False
             logger.info(f"[{self.model_name}] Loaded {num_classes} classes")
 
-            # Safe loading attempting weights_only=True without PyTorch version spoofing
-            checkpoint = None
+            # Safe loading with strict weights_only=True (never executes arbitrary pickle payloads)
             try:
                 checkpoint = torch.load(self.model_path, map_location=self.device, weights_only=True)
-            except Exception:
-                # If weights_only fails on legacy pickled state dictionaries, attempt load without version spoofing
-                try:
-                    checkpoint = torch.load(self.model_path, map_location=self.device)
-                except Exception as inner_e:
-                    logger.error(f"[{self.model_name}] Checkpoint loading failed: %s", type(inner_e).__name__)
-                    return False
+            except Exception as e:
+                logger.error(f"[{self.model_name}] Safe weights_only loading failed: %s", type(e).__name__)
+                return False
 
             if checkpoint is None:
                 logger.error(f"[{self.model_name}] Checkpoint could not be deserialized")
@@ -588,12 +623,35 @@ class MedicalModel:
 # DISEASE CLASSIFIER  (rewritten with CLIP + hard modality lock)
 # ═══════════════════════════════════════════════════════════════
 
+class _ModelDict(dict):
+    """Custom dictionary that tracks explicit user or test modifications."""
+    def __init__(self, owner, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._owner = owner
+
+    def pop(self, *args, **kwargs):
+        if self._owner is not None:
+            self._owner._explicitly_configured_models = True
+        return super().pop(*args, **kwargs)
+
+    def clear(self):
+        if self._owner is not None:
+            self._owner._explicitly_configured_models = True
+        super().clear()
+
+    def __delitem__(self, key):
+        if self._owner is not None:
+            self._owner._explicitly_configured_models = True
+        super().__delitem__(key)
+
+
 class DiseaseClassifier:
     """Orchestrates multi-model disease classification with CLIP domain routing and lazy loading."""
 
     def __init__(self):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.models: Dict[str, MedicalModel] = {}
+        self._explicitly_configured_models = False
+        self._models: Dict[str, MedicalModel] = _ModelDict(self)
         self.base_dir = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models"
         )
@@ -721,15 +779,29 @@ class DiseaseClassifier:
 
         return configs
 
+    @property
+    def models(self) -> Dict[str, MedicalModel]:
+        return self._models
+
+    @models.setter
+    def models(self, value):
+        self._models = _ModelDict(self, value or {})
+        self._explicitly_configured_models = True
+
     def get_specialist_model(self, domain: str) -> Optional[MedicalModel]:
         """
         Lazy-load a specialist model on demand with double-checked locking stampede protection.
         Explicitly tracks lifecycle states: unloaded -> loading -> ready | failed | unavailable.
         """
         # If model is already loaded or pre-injected (e.g. in test fixtures), return immediately
-        if domain in self.models and self.models[domain] is not None:
+        if domain in self._models and self._models[domain] is not None:
             self.model_status[domain] = "ready"
-            return self.models[domain]
+            return self._models[domain]
+
+        # If models were explicitly configured or emptied by caller/tests, do not auto-load from disk
+        if self._explicitly_configured_models:
+            self.model_status[domain] = "unavailable"
+            return None
 
         if domain not in self.model_configs:
             self.model_status[domain] = "unavailable"
@@ -880,9 +952,12 @@ class DiseaseClassifier:
                 "anatomical_region": part,
                 "score": round(top_score, 4),
                 "clinical_note": (
-                    f"The model identified the anatomical region as {part}. "
-                    "The classifier vocabulary does not provide evidence of fracture or pneumonia for this image, "
-                    "and anatomical classification alone cannot determine the presence or absence of an abnormality."
+                    f"The model identified visual features consistent with the {part} anatomical region. "
+                    "This prototype model classifies anatomical regions and selected conditions, but cannot reliably "
+                    "assess, confirm, or rule out fractures, fissures, soft-tissue injuries, or other skeletal abnormalities, "
+                    "and cannot determine the presence or absence of an abnormality. "
+                    "Anatomical identification must NOT be interpreted as proof that no abnormality exists. "
+                    "A qualified radiologist or physician must evaluate the radiograph in person."
                 ),
                 "predictions": formatted_preds,
             }
@@ -1034,6 +1109,21 @@ class DiseaseClassifier:
                     "This is an uncalibrated algorithmic output and does not establish medical health or rule out clinical conditions."
                 ),
                 "predictions": formatted_preds,
+            }
+
+        # Safeguard: do not force a clinical disease prediction on diffuse/low-confidence model scores
+        # (e.g. non-medical animal fur or non-dermatological surfaces with skin-like chroma)
+        if category == "skin" and top_score < 0.12:
+            return {
+                "status": "inconclusive",
+                "reason": "low_confidence_diffuse_distribution",
+                "message": (
+                    "Image analysis was inconclusive. Visual features do not match documented dermatological conditions with sufficient specificity. "
+                    "Please ensure the image is a clear, well-lit medical photograph of the affected skin area, or consult a physician in person."
+                ),
+                "disease": None,
+                "score": round(top_score, 4),
+                "predictions": [],
             }
 
         # Top prediction is a condition / pathology
