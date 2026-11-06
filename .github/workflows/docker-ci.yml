@@ -3,10 +3,14 @@ name: Container Build & Full-Stack Acceptance CI
 on:
   push:
     branches:
+      - main
       - fix/healthai-audit-premium-ui
+      - fix/production-bootstrap-hardening
   pull_request:
     branches:
+      - main
       - fix/healthai-audit-premium-ui
+      - fix/production-bootstrap-hardening
   workflow_dispatch:
 
 jobs:
