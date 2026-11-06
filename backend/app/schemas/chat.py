@@ -28,4 +28,5 @@ class ChatResponse(BaseModel):
     source: str
     timestamp: str
     success: bool
+    session_id: Optional[str] = None
     follow_up: Optional[FollowUpData] = None

@@ -1,22 +1,15 @@
 """
 NewGenHealthAI — services/disease_classifier.py
 
-# Override torch version to bypass faulty security check (treats 2.11 as older than 2.6)
-try:
-    import torch
-    torch.__version__ = "2.6.1"
-except ImportError:
-    pass
-
-Multi-model disease classifier with CLIP-based domain detection and
-hard modality locking.
+Multi-model disease classifier with CLIP-based domain detection,
+lazy specialist loading, and hard modality locking.
 
 Pipeline:
 1. Use CLIP zero-shot to determine image domain (skin / xray / retina / general / non_medical)
 2. Run ONLY the matching specialist model (hard lock — no cross-contamination)
 3. Filter garbage / dataset-artifact predictions
 4. Return the top disease prediction from the specialist model
-5. Non-medical images are flagged for BLIP captioning in the API layer
+5. Non-medical images are flagged for optional captioning in the API layer
 
 Detected architectures (from inspect_models.py):
   skin    -> timm EfficientNet (conv_stem + blocks), 216 classes
@@ -26,8 +19,19 @@ Detected architectures (from inspect_models.py):
 """
 
 import os
+import hashlib
+import threading
+from typing import Dict, Optional, Tuple
+
+TRUSTED_CHECKPOINT_HASHES = {
+    "skin_disease_model.pth": "0bc3877c6ece5c9b72b59f174403874d73cd3204dc4ed2f38edd9b2be5ed61fe",
+    "xray_fracture_model.pth": "ed146630d81fa37dc44f45f72cb80cc8b7f7aa3628bcee92c555bd4061580937",
+    "retina_model.pth": "b5510938daea44433589fabe98ba7c5069ceb8a18dea0ebab68c861258e28862",
+    "general_disease_model.pth": "adcdb81092710787de6dbf382b8e6432e5f279237667b67ef88b0a81a191f7cc",
+}
 
 import numpy as np
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -41,15 +45,26 @@ from app.core.logging_config import logger
 # PREDICTION QUALITY FILTERS
 # ═══════════════════════════════════════════════════════════════
 
-# Dataset artifact classes — NEVER return these as a diagnosis
-GARBAGE_CLASSES = {
+# Dataset artifact classes — non-medical strings, filesystem paths, split names.
+# NEVER return these as a condition or diagnosis.
+DATASET_ARTIFACT_CLASSES = {
     "all", "train", "test", "val", "valid", "done", "preview", "cropped",
     "jpegimages", "test cases", "other", "others", "others augmented",
     "c-nmc test final phase data", "c-nmc test prelim phase data",
     "im dyskeratotic", "im koilocytotic", "im metaplastic",
     "im parabasal", "im superficial-intermediate",
-    "none", "notumor", "notinfected", "uninfected", "non-covid",
-    "bengin cases", "normal", "normal cases", "monkeypox augmented",
+    "none", "monkeypox augmented",
+}
+
+# Backward compatibility alias
+GARBAGE_CLASSES = DATASET_ARTIFACT_CLASSES
+
+# Legitimate negative, normal, uninfected, and benign reference findings.
+# These MUST NEVER be suppressed or treated as garbage dataset artifacts.
+VALID_NEGATIVE_CLASSES = {
+    "normal", "normal cases", "notumor", "notinfected", "uninfected",
+    "non-covid", "bengin cases", "benign",
+    "healthy eye (no observable ocular disease)",
 }
 
 # X-ray body parts — anatomical locations, not diseases
@@ -132,16 +147,42 @@ CLIP_DOMAIN_MAP = {
 
 
 def _get_clip():
-    """Lazy-load CLIP model (one-time ~600MB download)."""
+    """Lazy-load CLIP model without implicit network downloads when offline."""
     global _clip_model, _clip_processor
     if _clip_model is None:
-        from transformers import CLIPProcessor, CLIPModel
-        logger.info("Loading CLIP model for domain detection (one-time)...")
-        _clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
-        _clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
-        _clip_model.eval()
-        logger.info("CLIP model loaded successfully.")
+        try:
+            from transformers import CLIPProcessor, CLIPModel
+            from app.core.config import ALLOW_MODEL_DOWNLOADS
+
+            kwargs = {}
+            if not ALLOW_MODEL_DOWNLOADS:
+                kwargs["local_files_only"] = True
+
+            logger.info("Loading CLIP model for domain detection...")
+            _clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32", **kwargs)
+            _clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32", **kwargs)
+            _clip_model.eval()
+            logger.info("CLIP model loaded successfully.")
+        except Exception as e:
+            logger.warning("CLIP model unavailable (%s)", type(e).__name__)
+            return None, None
     return _clip_model, _clip_processor
+
+
+def detect_domain_from_visual_features(img: Image.Image) -> tuple:
+    """
+    DEPRECATED & NEUTRALIZED — Visual heuristics are prohibited from clinical modality routing.
+
+    Autonomous clinical modality routing or medical image acceptance/rejection using visual heuristics
+    (such as skin chrominance, YCbCr, green/blue ratios, chroma saturation, corner aperture brightness,
+    or edge density) is completely disabled in accordance with clinical safety governance.
+
+    Explicit user modality selection is the mandatory requirement for medical analysis.
+
+    Returns: (domain_name: str, confidence: float, all_scores: dict)
+    domain_name is unconditionally 'ambiguous' (conf=0.0).
+    """
+    return "ambiguous", 0.0, {"ambiguous": 0.0}
 
 
 def detect_visual_domain(image: Image.Image) -> tuple:
@@ -151,6 +192,8 @@ def detect_visual_domain(image: Image.Image) -> tuple:
     """
     try:
         model, processor = _get_clip()
+        if model is None or processor is None:
+            return "unknown", 0.0, {"error": "CLIP model unavailable"}
 
         inputs = processor(
             text=CLIP_DOMAIN_PROMPTS,
@@ -178,33 +221,17 @@ def detect_visual_domain(image: Image.Image) -> tuple:
             f"scores={scores}"
         )
 
-        # ── SECONDARY VALIDATION ──
-        # If the top domain confidence is low (<0.30), check if any medical
-        # domain is close.  This prevents a borderline medical image from
-        # being routed to "non_medical".
-        if best_domain == "non_medical" and best_conf < 0.45:
-            # Sum up all medical domain probabilities
-            medical_sum = sum(
-                float(probs[i]) for i in range(4)  # skin + xray + retina + general
-            )
-            if medical_sum > 0.55:
-                # Re-pick the best medical domain
-                medical_probs = {CLIP_DOMAIN_MAP[i]: float(probs[i]) for i in range(4)}
-                best_medical = max(medical_probs, key=medical_probs.get)
-                logger.info(
-                    f"CLIP secondary validation: overriding non_medical -> {best_medical} "
-                    f"(medical_sum={medical_sum:.3f})"
-                )
-                return best_medical, medical_probs[best_medical], scores
+        if best_conf < 0.30:
+            logger.info("CLIP domain detection confidence below threshold (%.3f); marking ambiguous", best_conf)
+            return "ambiguous", best_conf, scores
 
         return best_domain, best_conf, scores
 
     except Exception as e:
-        logger.error(f"CLIP domain detection error: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
-        # Fallback: run general model if CLIP fails
-        return "general", 0.0, {}
+        logger.error("CLIP domain detection error: %s", type(e).__name__)
+        # Never silently fall back to general on CLIP failure; return unknown
+        return "unknown", 0.0, {"error": type(e).__name__}
+
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -267,7 +294,7 @@ def _build_model(arch, num_classes, state_dict):
     if arch == "timm_efficientnet":
         try:
             import timm
-            for model_name in ["tf_efficientnet_b4_ns", "efficientnet_b4", "tf_efficientnet_b4"]:
+            for model_name in ["tf_efficientnet_b4.ns_jft_in1k", "tf_efficientnet_b4_ns", "efficientnet_b4", "tf_efficientnet_b4"]:
                 try:
                     model = timm.create_model(model_name, pretrained=False, num_classes=num_classes)
                     model.load_state_dict(state_dict)
@@ -394,6 +421,7 @@ class MedicalModel:
         self.device = device
         self.classes = []
         self.model = None
+        self.arch = None
         self.input_size = 224
         self._transform = None
 
@@ -411,21 +439,57 @@ class MedicalModel:
         return self._transform
 
     def load(self):
-        """Load class labels and model weights, auto-detecting architecture."""
+        """Load class labels and model weights, verifying SHA-256 integrity and safe weights-only loading."""
         if not os.path.exists(self.model_path):
-            logger.warning(f"[{self.model_name}] Model file not found: {self.model_path}")
+            logger.warning(f"[{self.model_name}] Model weights artifact missing")
             return False
         if not os.path.exists(self.class_path):
-            logger.warning(f"[{self.model_name}] Class file not found: {self.class_path}")
+            logger.warning(f"[{self.model_name}] Class label definition missing")
             return False
+
+        # Security Pre-flight: verify checkpoint SHA-256 hash against pinned trusted hashes
+        base_name = os.path.basename(self.model_path)
+        expected_sha = TRUSTED_CHECKPOINT_HASHES.get(base_name)
+        if expected_sha:
+            hasher = hashlib.sha256()
+            try:
+                with open(self.model_path, "rb") as f:
+                    while chunk := f.read(65536):
+                        hasher.update(chunk)
+                actual_sha = hasher.hexdigest().lower()
+                if actual_sha != expected_sha.lower():
+                    logger.error(
+                        f"[{self.model_name}] Checkpoint hash mismatch! Expected {expected_sha}, got {actual_sha}. Loading aborted for security."
+                    )
+                    return False
+                logger.info(f"[{self.model_name}] Cryptographic integrity verified: {expected_sha[:16]}...")
+            except Exception as e:
+                logger.error(f"[{self.model_name}] Failed to verify file integrity hash: {type(e).__name__}")
+                return False
 
         try:
             self.classes = _parse_class_file(self.class_path)
             num_classes = len(self.classes)
+            if num_classes == 0:
+                logger.error(f"[{self.model_name}] Class file empty or invalid")
+                return False
             logger.info(f"[{self.model_name}] Loaded {num_classes} classes")
 
-            checkpoint = torch.load(self.model_path, map_location=self.device)
+            # Safe loading with strict weights_only=True (never executes arbitrary pickle payloads)
+            try:
+                checkpoint = torch.load(self.model_path, map_location=self.device, weights_only=True)
+            except Exception as e:
+                logger.error(f"[{self.model_name}] Safe weights_only loading failed: %s", type(e).__name__)
+                return False
+
+            if checkpoint is None:
+                logger.error(f"[{self.model_name}] Checkpoint could not be deserialized")
+                return False
+
             state_dict, metadata = _unwrap_state_dict(checkpoint)
+            if not isinstance(state_dict, dict) or not state_dict:
+                logger.error(f"[{self.model_name}] Malformed checkpoint: state_dict is not a dictionary")
+                return False
 
             if "image_size" in metadata:
                 img_size = metadata["image_size"]
@@ -436,6 +500,7 @@ class MedicalModel:
                 logger.info(f"[{self.model_name}] Image size from metadata: {self.input_size}")
 
             arch = _detect_architecture(state_dict.keys())
+            self.arch = arch
             logger.info(f"[{self.model_name}] Detected architecture: {arch}")
 
             if arch == "unknown":
@@ -460,10 +525,9 @@ class MedicalModel:
             )
             return True
         except Exception as e:
-            logger.error(f"[{self.model_name}] Error loading model: {str(e)}")
-            import traceback
-            logger.error(traceback.format_exc())
+            logger.error(f"[{self.model_name}] Error loading model: %s", type(e).__name__)
             return False
+
 
     def predict(self, image: Image.Image):
         """Return top-5 predictions and the top confidence."""
@@ -493,38 +557,88 @@ class MedicalModel:
 # DISEASE CLASSIFIER  (rewritten with CLIP + hard modality lock)
 # ═══════════════════════════════════════════════════════════════
 
+class _ModelDict(dict):
+    """Custom dictionary that tracks explicit user or test modifications."""
+    def __init__(self, owner, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._owner = owner
+
+    def pop(self, *args, **kwargs):
+        if self._owner is not None:
+            self._owner._explicitly_configured_models = True
+        return super().pop(*args, **kwargs)
+
+    def clear(self):
+        if self._owner is not None:
+            self._owner._explicitly_configured_models = True
+        super().clear()
+
+    def __delitem__(self, key):
+        if self._owner is not None:
+            self._owner._explicitly_configured_models = True
+        super().__delitem__(key)
+
+
 class DiseaseClassifier:
-    """Orchestrates multi-model disease classification with CLIP domain routing."""
+    """Orchestrates multi-model disease classification with CLIP domain routing and lazy loading."""
 
     def __init__(self):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.models = {}
+        self._explicitly_configured_models = False
+        self._models: Dict[str, MedicalModel] = _ModelDict(self)
         self.base_dir = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models"
         )
-        self._download_models_if_missing()
+        self.model_status: Dict[str, str] = {
+            "skin": "unloaded",
+            "xray": "unloaded",
+            "retina": "unloaded",
+            "general": "unloaded",
+        }
+        self._model_load_locks: Dict[str, threading.Lock] = {
+            "skin": threading.Lock(),
+            "xray": threading.Lock(),
+            "retina": threading.Lock(),
+            "general": threading.Lock(),
+        }
+
+        from app.core.config import ALLOW_MODEL_DOWNLOADS
+        if ALLOW_MODEL_DOWNLOADS:
+            self._download_models_if_missing()
+        else:
+            logger.info("Automatic model artifact downloads disabled (ALLOW_MODEL_DOWNLOADS=false).")
+
         self.model_configs = self._discover_models()
+        for domain in ["skin", "xray", "retina", "general"]:
+            if domain in self.model_configs:
+                self.model_status[domain] = "unloaded"
+            else:
+                self.model_status[domain] = "unavailable"
 
     def _download_models_if_missing(self):
-        """Download the .pth models from a Hugging Face model repository if they don't exist locally."""
+        """Download the .pth models from a Hugging Face model repository if configured and permitted."""
+        from app.core.config import ALLOW_MODEL_DOWNLOADS
+        if not ALLOW_MODEL_DOWNLOADS:
+            logger.info("Automatic model artifact downloads disabled (ALLOW_MODEL_DOWNLOADS=false).")
+            return False
+
         repo_id = os.environ.get("HF_MODEL_REPO")
         hf_token = os.environ.get("HF_TOKEN")
 
-        # Expected filenames
+
         expected_files = {
             "skin": "skin_disease_model.pth",
             "xray": "xray_fracture_model.pth",
             "retina": "retina_model.pth",
-            "general": "general_disease_model.pth"
+            "general": "general_disease_model.pth",
         }
 
         os.makedirs(self.base_dir, exist_ok=True)
 
-        # Check if any .pth file is missing
         missing_any = False
         try:
             files = os.listdir(self.base_dir)
-            for kw, filename in expected_files.items():
+            for kw, _ in expected_files.items():
                 has_pth = any(kw in f.lower() and f.endswith(".pth") for f in files)
                 if not has_pth:
                     missing_any = True
@@ -538,25 +652,19 @@ class DiseaseClassifier:
 
         if not repo_id:
             logger.warning(
-                "WARNING: HF_MODEL_REPO environment variable is not configured. "
-                "Hugging Face model download skipped. Image classification features will be disabled/degraded."
+                "HF_MODEL_REPO environment variable is not configured. "
+                "Hugging Face model download skipped. Specialist models will be marked unavailable."
             )
             return
 
-        logger.info("Some medical model files are missing. Attempting automatic download from Hugging Face Repo: %s...", repo_id)
+        logger.info("Downloading missing model artifacts from Hugging Face Repo: %s...", repo_id)
 
         try:
             from huggingface_hub import hf_hub_download
             import shutil
 
-            repo_accessible = True
-
             for kw, filename in expected_files.items():
-                if not repo_accessible:
-                    break
-
                 dest_path = os.path.join(self.base_dir, filename)
-                # Check if it already exists to avoid re-downloading
                 try:
                     current_files = os.listdir(self.base_dir)
                 except Exception:
@@ -569,25 +677,17 @@ class DiseaseClassifier:
                             repo_id=repo_id,
                             filename=filename,
                             repo_type="model",
-                            token=hf_token
+                            token=hf_token,
                         )
                         shutil.copy(downloaded_path, dest_path)
-                        logger.info(f"[{kw}] Successfully downloaded and copied model to {dest_path}")
+                        logger.info(f"[{kw}] Successfully downloaded and copied model.")
                     except Exception as e:
-                        logger.warning(
-                            f"WARNING: Image classification model download failed from repository '{repo_id}'. "
-                            f"Reason: {e}. Image classification features will be disabled/degraded."
-                        )
-                        repo_accessible = False
+                        logger.warning(f"[{kw}] Model download failed: %s", type(e).__name__)
                         break
         except Exception as e:
-            logger.warning(
-                f"WARNING: HuggingFace model downloader initialization failed: {e}. "
-                "Image classification features will be disabled/degraded."
-            )
+            logger.warning("HuggingFace model downloader failed: %s", type(e).__name__)
 
-
-    def _discover_models(self):
+    def _discover_models(self) -> Dict[str, Dict[str, str]]:
         """Automatically find model and class files in the models directory."""
         configs = {}
         keywords = ["skin", "xray", "retina", "general"]
@@ -607,266 +707,1101 @@ class DiseaseClassifier:
                         "pth": os.path.join(self.base_dir, pth_file),
                         "txt": os.path.join(self.base_dir, txt_file),
                     }
-                    logger.info(f"Discovered {kw} model: {pth_file} with {txt_file}")
+                    logger.info("Discovered %s model configuration: %s with %s", kw, pth_file, txt_file)
         except Exception as e:
-            logger.error(f"Error during model discovery: {str(e)}")
+            logger.error("Error during model discovery: %s", type(e).__name__)
 
         return configs
 
-    def initialize_models(self):
-        """Load all available models at startup."""
-        logger.info("Initializing multi-model disease classifier...")
-        for name, paths in self.model_configs.items():
-            model = MedicalModel(name, paths["pth"], paths["txt"], self.device)
+    @property
+    def models(self) -> Dict[str, MedicalModel]:
+        return self._models
+
+    @models.setter
+    def models(self, value):
+        self._models = _ModelDict(self, value or {})
+        self._explicitly_configured_models = True
+
+    def get_specialist_model(self, domain: str) -> Optional[MedicalModel]:
+        """
+        Lazy-load a specialist model on demand with double-checked locking stampede protection.
+        Explicitly tracks lifecycle states: unloaded -> loading -> ready | failed | unavailable.
+        """
+        # If model is already loaded or pre-injected (e.g. in test fixtures), return immediately
+        if domain in self._models and self._models[domain] is not None:
+            self.model_status[domain] = "ready"
+            return self._models[domain]
+
+        # If models were explicitly configured or emptied by caller/tests, do not auto-load from disk
+        if self._explicitly_configured_models:
+            self.model_status[domain] = "unavailable"
+            return None
+
+        if domain not in self.model_configs:
+            self.model_status[domain] = "unavailable"
+            return None
+
+        if self.model_status.get(domain) in ("unavailable", "failed"):
+            return None
+
+
+        lock = self._model_load_locks.get(domain)
+        if not lock:
+            lock = threading.Lock()
+            self._model_load_locks[domain] = lock
+
+        with lock:
+            if self.model_status.get(domain) == "ready" and domain in self.models:
+                return self.models[domain]
+            if self.model_status.get(domain) in ("unavailable", "failed"):
+                return None
+
+            self.model_status[domain] = "loading"
+            logger.info("Lazy-loading specialist model for domain '%s'...", domain)
+            paths = self.model_configs[domain]
+            model = MedicalModel(domain, paths["pth"], paths["txt"], self.device)
             if model.load():
-                self.models[name] = model
+                self.models[domain] = model
+                self.model_status[domain] = "ready"
+                logger.info("Specialist model '%s' is now READY", domain)
+                return model
             else:
-                logger.warning(f"Skipping {name} model (failed to load)")
+                self.model_status[domain] = "failed"
+                logger.warning("Specialist model '%s' FAILED to load", domain)
+                return None
+
+    def initialize_models(self):
+        """Pre-load all discovered specialist models."""
+        logger.info("Initializing multi-model disease classifier...")
+        for name in list(self.model_configs.keys()):
+            self.get_specialist_model(name)
+        ready_models = [k for k, v in self.model_status.items() if v == "ready"]
         logger.info(
-            f"Disease classifier ready — {len(self.models)} model(s) loaded: "
-            f"{list(self.models.keys())}"
+            "Disease classifier initialization complete — %d model(s) ready: %s",
+            len(ready_models), ready_models
         )
 
-        # Pre-warm CLIP so first request isn't slow
-        try:
-            _get_clip()
-        except Exception as e:
-            logger.warning(f"CLIP pre-warm failed (will retry on first request): {e}")
+        from app.core.config import ALLOW_MODEL_DOWNLOADS
+        if ALLOW_MODEL_DOWNLOADS:
+            try:
+                _get_clip()
+            except Exception as e:
+                logger.warning("CLIP pre-warm failed: %s", type(e).__name__)
+
 
     # ── helpers ────────────────────────────────────────────────
 
     @staticmethod
     def _first_clean_prediction(predictions):
-        """Return the first non-garbage prediction, or None."""
+        """
+        Return the first valid non-artifact prediction, or None.
+        Preserves valid negative/normal classes without suppressing them.
+        """
         for p in predictions:
-            if p["disease"].lower().strip() not in GARBAGE_CLASSES:
+            name = p["disease"].lower().strip()
+            if name not in DATASET_ARTIFACT_CLASSES:
                 return p["disease"], p["confidence"]
         return None, 0.0
 
     @staticmethod
     def _format_disease(category, raw_name):
-        """Pretty-print a disease name for the UI."""
+        """Format a disease, condition, or reference finding name for display."""
+        if not raw_name:
+            return ""
         key = raw_name.lower().strip()
+        # Handle legitimate negative / normal reference classes
+        if key in {"normal", "normal cases"}:
+            return "Normal Reference Finding"
+        if key == "notumor":
+            return "No Tumor Detected (Reference Normal)"
+        if key in {"notinfected", "uninfected"}:
+            return "Uninfected / Negative Finding"
+        if key == "non-covid":
+            return "Non-COVID Finding"
+        if key in {"bengin cases", "benign"}:
+            return "Benign Finding"
+        if key == "healthy eye (no observable ocular disease)":
+            return "Healthy Eye (No Observable Ocular Disease)"
         if category == "general" and key in GENERAL_DISPLAY:
             return GENERAL_DISPLAY[key]
         if category == "retina":
-            return raw_name          # already well-formatted
+            return raw_name
         if category == "xray" and key in XRAY_CONDITIONS:
             return raw_name.title()
         return raw_name.replace("_", " ").title()
 
+    def _interpret_xray_predictions(self, predictions, raw_conf):
+        """
+        Interpret predictions from the X-ray specialist model.
+        Guarantees:
+        - Anatomical classes (wrist, elbow, etc.) are treated as anatomy, NOT disease.
+        - Never manufactures an abnormality or fracture from a body-part prediction.
+        - Never promotes a low-ranked fracture or pneumonia when top prediction is anatomy.
+        - If top prediction is an artifact, returns inconclusive.
+        """
+        if not predictions:
+            return {
+                "status": "inconclusive",
+                "reason": "empty_predictions",
+                "message": "Model returned no predictions.",
+                "disease": None,
+                "score": 0.0,
+                "predictions": [],
+            }
+
+        top_p = predictions[0]
+        top_name = top_p["disease"].lower().strip()
+        top_score = float(top_p["confidence"])
+
+        # Check if top prediction is an invalid artifact
+        if top_name in DATASET_ARTIFACT_CLASSES:
+            return {
+                "status": "inconclusive",
+                "reason": "top_prediction_is_artifact",
+                "message": "Highest-ranked prediction is an unvalidated dataset artifact. Automatic disease promotion suppressed.",
+                "artifact_class": top_p["disease"],
+                "disease": None,
+                "score": 0.0,
+                "predictions": [],
+            }
+
+        # Case 1: Top prediction is an anatomical location (e.g. wrist = 0.95)
+        if top_name in XRAY_BODY_PARTS:
+            part = top_p["disease"].title()
+            formatted_preds = [
+                {
+                    "disease": self._format_disease("xray", p["disease"]),
+                    "score": round(float(p["confidence"]), 4),
+                    "confidence": round(float(p["confidence"]), 4),
+                }
+                for p in predictions
+                if p["disease"].lower().strip() not in DATASET_ARTIFACT_CLASSES
+            ][:5]
+
+            return {
+                "status": "analysis_complete",
+                "finding_type": "anatomy_identified",
+                "is_negative_finding": False,
+                "disease": f"Anatomy Identified: {part} (No pathology classified)",
+                "anatomical_region": part,
+                "score": round(top_score, 4),
+                "clinical_note": (
+                    f"The model identified visual features consistent with the {part} anatomical region. "
+                    "This prototype model classifies anatomical regions and selected conditions, but cannot reliably "
+                    "assess, confirm, or rule out fractures, fissures, soft-tissue injuries, or other skeletal abnormalities, "
+                    "and cannot determine the presence or absence of an abnormality. "
+                    "Anatomical identification must NOT be interpreted as proof that no abnormality exists. "
+                    "A qualified radiologist or physician must evaluate the radiograph in person."
+                ),
+                "predictions": formatted_preds,
+            }
+
+        # Case 2: Top prediction is a valid negative finding
+        if top_name in VALID_NEGATIVE_CLASSES:
+            display = self._format_disease("xray", top_p["disease"])
+            formatted_preds = [
+                {
+                    "disease": self._format_disease("xray", p["disease"]),
+                    "score": round(float(p["confidence"]), 4),
+                    "confidence": round(float(p["confidence"]), 4),
+                }
+                for p in predictions
+                if p["disease"].lower().strip() not in DATASET_ARTIFACT_CLASSES
+            ][:5]
+            return {
+                "status": "analysis_complete",
+                "finding_type": "normal_or_negative",
+                "is_negative_finding": True,
+                "disease": display,
+                "raw_prediction": top_p["disease"],
+                "score": round(top_score, 4),
+                "clinical_note": (
+                    f"Model identified features matching '{display}'. "
+                    "This is an uncalibrated algorithmic output and does not establish medical health or rule out clinical conditions."
+                ),
+                "predictions": formatted_preds,
+            }
+
+        # Case 3: Top prediction is an actual medical condition (fracture or pneumonia)
+        if top_name in XRAY_CONDITIONS:
+            cond = top_name.title()
+            # If an anatomy class appears as a secondary finding, we can note it
+            secondary_anatomy = next(
+                (p["disease"].title() for p in predictions[1:] if p["disease"].lower().strip() in XRAY_BODY_PARTS),
+                None
+            )
+            display = f"{secondary_anatomy} {cond}" if secondary_anatomy else cond
+
+            formatted_preds = [
+                {
+                    "disease": self._format_disease("xray", p["disease"]),
+                    "score": round(float(p["confidence"]), 4),
+                    "confidence": round(float(p["confidence"]), 4),
+                }
+                for p in predictions
+                if p["disease"].lower().strip() not in DATASET_ARTIFACT_CLASSES
+            ][:5]
+
+            return {
+                "status": "analysis_complete",
+                "finding_type": "condition_detected",
+                "is_negative_finding": False,
+                "disease": display,
+                "anatomical_region": secondary_anatomy,
+                "score": round(top_score, 4),
+                "predictions": formatted_preds,
+            }
+
+        # Case 4: Any other non-artifact class
+        display = self._format_disease("xray", top_p["disease"])
+        formatted_preds = [
+            {
+                "disease": self._format_disease("xray", p["disease"]),
+                "score": round(float(p["confidence"]), 4),
+                "confidence": round(float(p["confidence"]), 4),
+            }
+            for p in predictions
+            if p["disease"].lower().strip() not in DATASET_ARTIFACT_CLASSES
+        ][:5]
+
+        return {
+            "status": "analysis_complete",
+            "finding_type": "condition_detected",
+            "is_negative_finding": False,
+            "disease": display,
+            "score": round(top_score, 4),
+            "predictions": formatted_preds,
+        }
+
     def _get_xray_diagnosis(self, predictions):
+        """Backward-compatible helper wrapping _interpret_xray_predictions."""
+        res = self._interpret_xray_predictions(predictions, predictions[0]["confidence"] if predictions else 0.0)
+        return res.get("disease"), res.get("score", 0.0)
+
+    def _interpret_predictions(self, category: str, predictions: list, raw_conf: float):
         """
-        For X-ray model: extract the actual medical condition.
-        The X-ray model has body-part classes (elbow, wrist) AND condition classes
-        (fracture, pneumonia). We need the condition, not the body part.
-        
-        Strategy: 
-        - If 'fracture' or 'pneumonia' appears in top predictions, return it
-        - If only body parts appear, combine body part + "abnormality detected"
-        - Check relative confidence between body part and condition
+        Safely interpret predictions from specialist models.
+        Enforces:
+        - Highest-ranked valid negative class preserved (never promoted past).
+        - Highest-ranked artifact class triggers inconclusive status (never promoted past).
+        - Clean formatting of differential predictions.
         """
-        conditions = []
-        body_parts = []
+        if category == "xray":
+            return self._interpret_xray_predictions(predictions, raw_conf)
 
-        for p in predictions:
-            name = p["disease"].lower().strip()
-            if name in GARBAGE_CLASSES:
-                continue
-            if name in XRAY_CONDITIONS:
-                conditions.append(p)
-            elif name in XRAY_BODY_PARTS:
-                body_parts.append(p)
+        if not predictions:
+            return {
+                "status": "inconclusive",
+                "reason": "empty_predictions",
+                "message": "Model returned no predictions.",
+                "disease": None,
+                "score": 0.0,
+                "predictions": [],
+            }
 
-        if conditions:
-            # Return the top condition
-            best = conditions[0]
-            # If we also know the body part, make it more descriptive
-            if body_parts:
-                part = body_parts[0]["disease"].title()
-                cond = best["disease"].title()
-                return f"{part} {cond}", best["confidence"]
-            return best["disease"].title(), best["confidence"]
+        top_p = predictions[0]
+        top_name = top_p["disease"].lower().strip()
+        top_score = float(top_p["confidence"])
 
-        if body_parts:
-            # Only body parts detected — model sees the anatomy but
-            # can't determine the specific condition with high confidence
-            part = body_parts[0]["disease"].title()
-            return f"{part} X-ray — Abnormality Detected", body_parts[0]["confidence"]
+        # Check if top prediction is an invalid artifact
+        if top_name in DATASET_ARTIFACT_CLASSES:
+            return {
+                "status": "inconclusive",
+                "reason": "top_prediction_is_artifact",
+                "message": (
+                    "The highest-ranked model prediction is an unvalidated dataset artifact. "
+                    "Automatic promotion of lower-ranked conditions is suppressed."
+                ),
+                "artifact_class": top_p["disease"],
+                "disease": None,
+                "score": 0.0,
+                "predictions": [],
+            }
 
-        return None, 0.0
+        # Check if top prediction is a legitimate normal or negative finding
+        if top_name in VALID_NEGATIVE_CLASSES:
+            display = self._format_disease(category, top_p["disease"])
+            formatted_preds = [
+                {
+                    "disease": self._format_disease(category, p["disease"]),
+                    "score": round(float(p["confidence"]), 4),
+                    "confidence": round(float(p["confidence"]), 4),
+                }
+                for p in predictions
+                if p["disease"].lower().strip() not in DATASET_ARTIFACT_CLASSES
+            ][:5]
+
+            return {
+                "status": "analysis_complete",
+                "finding_type": "normal_or_negative",
+                "is_negative_finding": True,
+                "disease": display,
+                "raw_prediction": top_p["disease"],
+                "score": round(top_score, 4),
+                "clinical_note": (
+                    f"Model identified features matching '{display}'. "
+                    "This is an uncalibrated algorithmic output and does not establish medical health or rule out clinical conditions."
+                ),
+                "predictions": formatted_preds,
+            }
+
+        # Safeguard: do not force a clinical disease prediction on diffuse/low-confidence model scores
+        # (e.g. non-medical animal fur or non-dermatological surfaces with skin-like chroma)
+        if category == "skin" and top_score < 0.12:
+            return {
+                "status": "inconclusive",
+                "reason": "low_confidence_diffuse_distribution",
+                "message": (
+                    "Image analysis was inconclusive. Visual features do not match documented dermatological conditions with sufficient specificity. "
+                    "Please ensure the image is a clear, well-lit medical photograph of the affected skin area, or consult a physician in person."
+                ),
+                "disease": None,
+                "score": round(top_score, 4),
+                "predictions": [],
+            }
+
+        # Top prediction is a condition / pathology
+        display = self._format_disease(category, top_p["disease"])
+        formatted_preds = [
+            {
+                "disease": self._format_disease(category, p["disease"]),
+                "score": round(float(p["confidence"]), 4),
+                "confidence": round(float(p["confidence"]), 4),
+            }
+            for p in predictions
+            if p["disease"].lower().strip() not in DATASET_ARTIFACT_CLASSES
+        ][:5]
+
+        return {
+            "status": "analysis_complete",
+            "finding_type": "condition_detected",
+            "is_negative_finding": False,
+            "disease": display,
+            "raw_prediction": top_p["disease"],
+            "score": round(top_score, 4),
+            "predictions": formatted_preds,
+        }
 
     # ── main entry point ──────────────────────────────────────
 
-    def classify(self, image: Image.Image, routed_category: str = None):
+    def classify(
+        self,
+        image: Image.Image,
+        routed_category: str = None,
+        modality_confirmed: bool = False,
+    ) -> dict:
         """
-        CLIP-routed classification with hard modality lock.
+        CLIP-routed classification with strict, hard modality locking.
 
-        1. CLIP determines what type of image this is
-        2. Only the matching specialist model runs
-        3. No cross-contamination between domains
-        4. Non-medical images are flagged for BLIP fallback
+        Guarantees:
+        1. Only the matching specialist model executes (no cross-modality contamination).
+        2. Missing specialist models return 'model_unavailable' (never fall back to general or all).
+        3. Non-medical images return 'unsupported_image' without running medical disease models.
+        4. Ambiguous or failed CLIP results return 'inconclusive'.
+        5. Valid normal/negative classes are preserved as top findings without disease promotion.
+        6. Top artifact predictions return 'inconclusive' without disease promotion.
+        7. Model scores are explicitly uncalibrated (false confidence claims removed).
         """
-        empty = {
-            "disease": None, "category": "non_medical",
-            "confidence": 0.0, "calibrated_conf": 0.0,
-            "predictions": [], "all_results": {},
-            "domain_hint": "non_medical", "domain_scores": {},
-        }
-
-        if not self.models:
-            return empty
-
-        # ── 1. CLIP domain detection ──────────────────────────
-        domain, domain_conf, domain_scores = detect_visual_domain(image)
-
-        logger.info(f"CLIP domain: {domain} (conf={domain_conf:.3f})")
-
-
-        # If CLIP says non-medical with high confidence, skip all models
-        if domain == "non_medical" and domain_conf > 0.40:
-            logger.info("Image classified as non-medical -- skipping disease models")
-            empty["domain_hint"] = "non_medical"
-            empty["domain_scores"] = domain_scores
-            empty["domain_confidence"] = round(domain_conf, 4)
-            return empty
-
-        # ── 2. Determine which model to run ────────────────
-        # HARD MODALITY LOCK: Only run the matching specialist model.
-        # This eliminates cross-contamination entirely.
-        models_to_run = []
-
-        if domain in self.models:
-            models_to_run.append(domain)
-        else:
-            # Domain model not loaded! 
-            # We DONT want to silently fallback to general because it will
-            # give wrong diagnoses (e.g. skin image used with general model).
-            logger.critical(f"HARD MODALITY LOCK: Domain '{domain}' detected, but specialist model NOT LOADED.")
-            
-            if "general" in self.models:
-                # If it's borderline or common enough, we might still want general 
-                # but we SHOULD warn the user that they are in a degraded state.
-                models_to_run.append("general")
-                logger.warning(f"Falling back to 'general' model for domain '{domain}' (DEGRADED STATE)")
-
-        # Safety: if somehow no models to run, run all
-        if not models_to_run:
-            models_to_run = list(self.models.keys())
-            logger.warning(f"No model for domain '{domain}', running all models")
-
-        # ── 3. Run selected model(s) ─────────────────────────
-        all_results = {}
-        primary_result = None
-
-        for cat in models_to_run:
-            model = self.models[cat]
-            try:
-                preds, raw_conf = model.predict(image)
-                if not preds:
-                    all_results[cat] = {"error": "empty"}
-                    continue
-
-                # Special handling for X-ray model
-                if cat == "xray":
-                    disease_name, disease_conf = self._get_xray_diagnosis(preds)
-                else:
-                    disease_name, disease_conf = self._first_clean_prediction(preds)
-
-                all_results[cat] = {
-                    "top_disease": disease_name or preds[0]["disease"],
-                    "top_confidence": disease_conf or raw_conf,
-                    "predictions": preds,
-                }
-
-                if disease_name is None:
-                    all_results[cat]["note"] = "all garbage classes"
-                    continue
-
-                logger.info(
-                    f"  [{cat}] {disease_name} (conf={disease_conf:.4f})"
-                )
-
-                # Skip predictions with extremely low confidence (noise)
-                MIN_CONFIDENCE = 0.02
-                if disease_conf < MIN_CONFIDENCE:
-                    logger.info(f"  [{cat}] Confidence {disease_conf:.4f} below threshold {MIN_CONFIDENCE}, skipping")
-                    all_results[cat]["note"] = f"below min confidence ({disease_conf:.4f})"
-                    continue
-
-                # The PRIMARY model (matching domain) always wins
-                if cat == domain and primary_result is None:
-                    primary_result = {
-                        "disease": disease_name,
-                        "category": cat,
-                        "confidence": disease_conf,
-                        "predictions": preds,
-                    }
-                elif primary_result is None:
-                    # General model as fallback only if domain model doesn't exist
-                    primary_result = {
-                        "disease": disease_name,
-                        "category": cat,
-                        "confidence": disease_conf,
-                        "predictions": preds,
-                    }
-
-            except Exception as e:
-                logger.error(f"Error running {cat} model: {e}")
-                all_results[cat] = {"error": str(e)}
-
-        # ── 4. Format output ──────────────────────────────────
-        if primary_result is None:
-            # All models failed or returned garbage — but CLIP said it's medical.
-            # Still return medical category so BLIP doesn't trigger.
-            logger.warning("All models returned garbage/low-conf but CLIP detected medical image")
+        if image is None:
             return {
-                "disease": "Unrecognized Medical Condition",
-                "category": domain,
+                "status": "invalid_image",
+                "message": "No valid image provided for classification.",
+                "category": None,
+                "disease": None,
+                "score": 0.0,
                 "confidence": 0.0,
-                "calibrated_conf": 0.0,
+                "calibrated_conf": None,
+                "calibrated_confidence": None,
                 "predictions": [],
-                "all_results": all_results,
-                "domain_hint": domain,
-                "domain_scores": domain_scores,
-                "domain_confidence": round(domain_conf, 4),
+                "domain_hint": "unknown",
+                "domain_scores": {},
+                "domain_confidence": 0.0,
             }
 
-        display_name = self._format_disease(
-            primary_result["category"], primary_result["disease"]
-        )
+        # ── 1. Multimodal Vision Understanding & Domain Detection ──
+        from app.services.vision_service import vision_service
 
-        # Format top-3 predictions (excluding garbage)
-        fmt_preds = []
-        for p in primary_result["predictions"][:5]:
-            d = p["disease"].lower().strip()
-            if d not in GARBAGE_CLASSES:
-                # For X-ray, skip body-part-only predictions in the list
-                if primary_result["category"] == "xray" and d in XRAY_BODY_PARTS:
-                    continue
-                fmt_preds.append({
-                    "disease": self._format_disease(primary_result["category"], p["disease"]),
-                    "confidence": p["confidence"],
-                })
-            if len(fmt_preds) >= 3:
-                break
-
+        understanding = vision_service.understand_image(image)
         logger.info(
-            f"DIAGNOSIS: {primary_result['category']} -> {display_name} "
-            f"(conf={primary_result['confidence']:.4f}, domain_conf={domain_conf:.3f})"
+            "Vision understanding: category=%s, subject=%s, is_medical=%s, engine=%s",
+            understanding.get("category"),
+            understanding.get("detected_subject"),
+            understanding.get("is_medical"),
+            understanding.get("engine"),
         )
 
-        return {
-            "disease": display_name,
-            "category": primary_result["category"],
-            "confidence": primary_result["confidence"],
-            "calibrated_conf": primary_result["confidence"],  # No cross-model scoring needed
-            "predictions": fmt_preds,
-            "all_results": all_results,
-            "domain_hint": domain,
-            "domain_scores": domain_scores,
-            "domain_confidence": round(domain_conf, 4),
-        }
+        domain, domain_conf, domain_scores = detect_visual_domain(image)
+        logger.info(f"CLIP domain detection: {domain} (conf={domain_conf:.3f})")
+
+        # Reconcile CLIP domain with Vision understanding:
+        # If Groq Vision AI identified the modality, use its multimodal inference
+        if domain in ("unknown", "ambiguous"):
+            if understanding.get("engine") in ("groq_vision", "local_neural_vision"):
+                if understanding.get("is_medical", False) and understanding.get("modality"):
+                    domain = understanding["modality"]
+                    domain_conf = 0.90 if understanding.get("confidence") == "high" else 0.70
+                    domain_scores = {domain: domain_conf}
+                elif understanding.get("category") == "ambiguous":
+                    domain = "ambiguous"
+                    domain_conf = 0.20
+                    domain_scores = {"ambiguous": 0.20}
+                else:
+                    domain = "non_medical"
+                    domain_conf = 0.95
+                    domain_scores = {"non_medical": 0.95}
+            elif not understanding.get("is_medical", True) and understanding.get("category") not in ("ambiguous", "medical_xray", "medical_skin", "medical_retina"):
+                domain = "non_medical"
+                domain_conf = 0.85
+                domain_scores = {"non_medical": 0.85}
+
+        # If CLIP or fallback flagged non_medical, ensure understanding reflects non-medical
+        if domain == "non_medical":
+            understanding["is_medical"] = False
+            understanding["medical_applicable"] = False
+
+        # ── 2. Handle Corrupted / Invalid Image ──
+        if understanding.get("category") == "invalid_image" or understanding.get("status") == "invalid_image":
+            return {
+                "status": "invalid_image",
+                "message": understanding.get("reason_not_applicable") or "No valid image provided for classification.",
+                "category": None,
+                "disease": None,
+                "score": 0.0,
+                "confidence": 0.0,
+                "predictions": [],
+                "vision_engine": understanding.get("engine", "heuristic_fallback"),
+            }
+
+        # ── 3. Routing & Override Safeguards ──
+        VALID_SPECIALIST_MODALITIES = {"skin", "xray", "retina", "general"}
+        if routed_category and routed_category.lower().strip() in VALID_SPECIALIST_MODALITIES:
+            routed_clean = routed_category.lower().strip()
+            modality_source = "user_selected"
+            target_category = routed_clean
+
+            # Override Safeguard 1: If genuine Groq Vision or Local Neural Vision AI is active
+            if understanding.get("engine") in ("groq_vision", "local_neural_vision"):
+                should_reject = False
+                if understanding.get("engine") == "groq_vision":
+                    should_reject = not understanding.get("is_medical", False)
+                elif understanding.get("engine") == "local_neural_vision":
+                    should_reject = (
+                        understanding.get("category") == "person"
+                        or understanding.get("detected_subject") == "Portrait of Person"
+                        or (
+                            understanding.get("category") in ("animal", "vehicle", "plant", "food")
+                            and understanding.get("confidence") == "high"
+                        )
+                    )
+
+                if should_reject:
+                    mismatch_explanation = (
+                        f"User-selected modality '{routed_category}' does not match the uploaded image content "
+                        f"({understanding.get('detected_subject', 'non-medical subject')}). "
+                    )
+                    base_reason = understanding.get("reason_not_applicable") or (
+                        "The uploaded image does not appear to be a supported medical image."
+                    )
+                    full_message = f"{mismatch_explanation}{base_reason}".strip()
+                    logger.info("Override rejected on non-medical image: %s", understanding.get("detected_subject"))
+
+                    p_status = understanding.get("person_detection", understanding.get("person_detection_status", "unsupported"))
+                    return {
+                        "status": "unsupported_image",
+                        "message": full_message,
+                        "type": "general_image",
+                        "category": "non_medical",
+                        "detected_category": understanding.get("category", "non_medical"),
+                        "detected_subject": understanding.get("detected_subject", "Visible Subject"),
+                        "description": understanding.get("description", full_message),
+                        "is_person": None,
+                        "person_detection": p_status,
+                        "person_detection_status": p_status,
+                        "medical_applicable": False,
+                        "reason_not_applicable": understanding.get("reason_not_applicable"),
+                        "safety_disclaimer": understanding.get("safety_disclaimer"),
+                        "modality_source": "user_selected",
+                        "override_rejected": True,
+                        "override_rejection_reason": f"Selected modality '{routed_category}' is incompatible with detected content ({understanding.get('detected_subject')}).",
+                        "disease": None,
+                        "score": 0.0,
+                        "confidence": 0.0,
+                        "calibrated_conf": None,
+                        "calibrated_confidence": None,
+                        "predictions": [],
+                        "domain_hint": "non_medical",
+                        "domain_scores": domain_scores if domain_scores else {"non_medical": 0.95},
+                        "domain_confidence": round(domain_conf, 4) if domain_conf else 0.95,
+                        "vision_engine": understanding.get("engine", "groq_vision"),
+                        "vision_model": understanding.get("vision_model"),
+                    }
+                elif understanding.get("modality") and understanding.get("modality").lower().strip() != routed_clean:
+                    return {
+                        "status": "inconclusive",
+                        "message": (
+                            f"User-selected modality '{routed_category}' does not match detected medical modality '{understanding.get('modality')}'. "
+                            f"Please select '{understanding.get('modality')}' or allow automatic routing."
+                        ),
+                        "category": "modality_mismatch",
+                        "detected_subject": understanding.get("detected_subject"),
+                        "override_rejected": True,
+                        "modality_source": "user_selected",
+                        "disease": None,
+                        "score": 0.0,
+                        "confidence": 0.0,
+                        "predictions": [],
+                        "vision_engine": understanding.get("engine", "groq_vision"),
+                        "vision_model": understanding.get("vision_model"),
+                    }
+
+        else:
+            # Automatic Intake (No Modality Override)
+            modality_source = "auto_detected"
+
+            # Case A: Multimodal Groq Vision is Active
+            if understanding.get("engine") == "groq_vision":
+                if not understanding.get("is_medical", False):
+                    if understanding.get("category") == "ambiguous":
+                        return {
+                            "status": "inconclusive",
+                            "message": understanding.get("reason_not_applicable") or "Image is too blurry or ambiguous.",
+                            "type": "general_image",
+                            "category": "ambiguous",
+                            "detected_subject": understanding.get("detected_subject", "Ambiguous Image"),
+                            "description": understanding.get("description"),
+                            "medical_applicable": False,
+                            "modality_source": "auto_detected",
+                            "disease": None,
+                            "score": 0.0,
+                            "predictions": [],
+                            "vision_engine": "groq_vision",
+                        }
+
+                    # Successful Universal General Recognition
+                    return {
+                        "status": "general_recognition",
+                        "success": True,
+                        "message": understanding.get("description", "Non-medical visual recognition complete."),
+                        "type": "general_image",
+                        "category": understanding.get("category", "non_medical"),
+                        "detected_category": understanding.get("category", "non_medical"),
+                        "detected_subject": understanding.get("detected_subject", "Visible Subject"),
+                        "description": understanding.get("description"),
+                        "is_person": understanding.get("is_person", False),
+                        "medical_applicable": False,
+                        "reason_not_applicable": understanding.get("reason_not_applicable"),
+                        "safety_disclaimer": understanding.get("safety_disclaimer"),
+                        "modality_source": "auto_detected",
+                        "disease": None,
+                        "score": 0.0,
+                        "confidence": 0.0,
+                        "calibrated_conf": None,
+                        "calibrated_confidence": None,
+                        "predictions": [],
+                        "domain_hint": "non_medical",
+                        "domain_scores": domain_scores if domain_scores else {"non_medical": 0.95},
+                        "domain_confidence": round(domain_conf, 4) if domain_conf else 0.95,
+                        "vision_engine": "groq_vision",
+                        "vision_model": understanding.get("vision_model"),
+                    }
+                else:
+                    # In automatic intake without explicit user selection, even if Groq vision detects medical modality,
+                    # automatic clinical routing is disabled to protect patient safety.
+                    return {
+                        "status": "modality_selection_required",
+                        "success": False,
+                        "routing_decision": "NO AUTOMATIC MEDICAL ROUTE",
+                        "message": (
+                            "Automatic clinical routing is disabled to ensure patient safety. "
+                            f"Identified potential {understanding.get('modality', 'clinical')} image ({understanding.get('detected_subject')}). "
+                            "Please explicitly select the medical modality (Skin, X-ray, Retina) to proceed."
+                        ),
+                        "type": "medical_selection_required",
+                        "category": understanding.get("modality", "ambiguous").lower().strip(),
+                        "detected_category": "ambiguous",
+                        "detected_subject": understanding.get("detected_subject", "Unrecognized Visual Subject"),
+                        "description": understanding.get("description"),
+                        "is_person": False,
+                        "medical_applicable": False,
+                        "reason_not_applicable": "Automatic medical routing is disabled; explicit user modality selection required.",
+                        "modality_source": "auto_intake_abstention",
+                        "disease": None,
+                        "score": 0.0,
+                        "confidence": 0.0,
+                        "predictions": [],
+                        "domain_hint": understanding.get("modality", "general"),
+                        "domain_scores": domain_scores,
+                        "domain_confidence": round(domain_conf, 4) if domain_conf else 0.0,
+                        "vision_engine": "groq_vision",
+                    }
+
+            # Case B: Local Neural Vision (MobileNetV3) is Active
+            elif understanding.get("engine") == "local_neural_vision":
+                if understanding.get("is_person") is True or (understanding.get("status") == "general_recognition" and understanding.get("category") in ("person", "animal", "vehicle", "plant", "food", "object", "landscape")):
+                    p_status = understanding.get("person_detection", understanding.get("person_detection_status", "unsupported" if understanding.get("is_person") is not True else "detected_portrait"))
+                    is_person_val = True if understanding.get("is_person") is True else None if p_status == "unsupported" or understanding.get("is_person") is None else False
+                    return {
+                        "status": "general_recognition",
+                        "success": True,
+                        "message": understanding.get("description", "Non-medical visual recognition complete."),
+                        "type": "general_image",
+                        "category": understanding.get("category", "non_medical"),
+                        "detected_category": understanding.get("category", "non_medical"),
+                        "detected_subject": understanding.get("detected_subject", "Visible Subject"),
+                        "description": understanding.get("description"),
+                        "is_person": is_person_val,
+                        "person_detection": p_status,
+                        "person_detection_status": p_status,
+                        "person_detection_note": understanding.get(
+                            "person_detection_note",
+                            "Person presence could not be reliably determined. Closed-set object classifier does not support general person detection."
+                        ),
+                        "medical_applicable": False,
+                        "reason_not_applicable": understanding.get("reason_not_applicable"),
+                        "safety_disclaimer": understanding.get("safety_disclaimer"),
+                        "modality_source": "auto_detected",
+                        "disease": None,
+                        "score": understanding.get("top1_prob", 0.0),
+                        "confidence": 0.0,
+                        "calibrated_conf": None,
+                        "calibrated_confidence": None,
+                        "top1_class": understanding.get("top1_name"),
+                        "top1_name": understanding.get("top1_name"),
+                        "top1_prob": understanding.get("top1_prob"),
+                        "raw_score": understanding.get("top1_prob"),
+                        "top1_idx": understanding.get("top1_idx"),
+                        "predictions": understanding.get("top5", []),
+                        "domain_hint": "non_medical",
+                        "domain_scores": domain_scores if domain_scores else {"non_medical": 0.95},
+                        "domain_confidence": round(domain_conf, 4) if domain_conf else 0.95,
+                        "vision_engine": "local_neural_vision",
+                        "vision_model": understanding.get("vision_model"),
+                        "routing_decision": "NO AUTOMATIC MEDICAL ROUTE",
+                    }
+                elif domain == "non_medical":
+                    return {
+                        "status": "unsupported_image",
+                        "message": "The uploaded image does not appear to be a supported medical image.",
+                        "type": "general_image",
+                        "category": "non_medical",
+                        "detected_category": "non_medical",
+                        "detected_subject": understanding.get("detected_subject", "Non-Medical Image"),
+                        "description": understanding.get("description", "Image does not match supported medical modalities."),
+                        "is_person": False,
+                        "medical_applicable": False,
+                        "reason_not_applicable": "Non-medical imagery is outside medical intake scope.",
+                        "modality_source": "auto_detected",
+                        "disease": None,
+                        "score": 0.0,
+                        "confidence": 0.0,
+                        "predictions": [],
+                        "domain_hint": domain,
+                        "domain_scores": domain_scores,
+                        "domain_confidence": round(domain_conf, 4) if domain_conf else 0.0,
+                        "vision_engine": "local_neural_vision",
+                        "top1_class": understanding.get("top1_name"),
+                        "top1_prob": understanding.get("top1_prob"),
+                        "raw_score": understanding.get("top1_prob"),
+                        "routing_decision": "NO AUTOMATIC MEDICAL ROUTE",
+                    }
+                elif understanding.get("status") == "ambiguous" or (domain in ("unknown", "ambiguous") and understanding.get("status") != "modality_selection_required"):
+                    return {
+                        "status": "inconclusive",
+                        "message": "Image modality could not be reliably determined from visual features. Please select a specific modality or upload a clearer clinical image.",
+                        "category": "ambiguous",
+                        "detected_category": "ambiguous",
+                        "detected_subject": understanding.get("detected_subject", "Unrecognized Visual Subject"),
+                        "description": understanding.get("description", "Image modality could not be determined without explicit user selection."),
+                        "is_person": False,
+                        "medical_applicable": False,
+                        "reason_not_applicable": "Image modality could not be reliably determined from visual features.",
+                        "modality_source": "auto_intake_abstention",
+                        "disease": None,
+                        "score": 0.0,
+                        "confidence": 0.0,
+                        "predictions": understanding.get("top5", []),
+                        "top1_class": understanding.get("top1_name"),
+                        "top1_prob": understanding.get("top1_prob"),
+                        "raw_score": understanding.get("top1_prob"),
+                        "domain_hint": domain,
+                        "domain_scores": domain_scores,
+                        "domain_confidence": round(domain_conf, 4) if domain_conf else 0.0,
+                        "vision_engine": "local_neural_vision",
+                        "routing_decision": "NO AUTOMATIC MEDICAL ROUTE",
+                    }
+                else:
+                    # Unrecognized / Ambiguous under Local Neural Vision without explicit modality selection
+                    # SAFETY RULE: Never route to specialist models on colour/contrast or unvalidated visual heuristics without explicit selection.
+                    return {
+                        "status": "modality_selection_required",
+                        "success": False,
+                        "routing_decision": "NO AUTOMATIC MEDICAL ROUTE",
+                        "message": (
+                            "Automatic clinical routing is disabled to prevent unvalidated heuristic diagnosis. "
+                            "If this is a clinical image, please select the specific modality (Skin, X-ray, Retina) to proceed."
+                        ),
+                        "type": "medical_selection_required",
+                        "category": "ambiguous",
+                        "detected_category": "ambiguous",
+                        "detected_subject": understanding.get("detected_subject", "Unrecognized Visual Subject"),
+                        "description": understanding.get("description", "Image modality could not be determined without explicit user selection."),
+                        "is_person": False,
+                        "medical_applicable": False,
+                        "reason_not_applicable": "Automatic medical routing is disabled; explicit user modality selection required.",
+                        "modality_source": "auto_intake_abstention",
+                        "disease": None,
+                        "score": 0.0,
+                        "confidence": 0.0,
+                        "predictions": understanding.get("top5", []),
+                        "top1_class": understanding.get("top1_name"),
+                        "top1_prob": understanding.get("top1_prob"),
+                        "raw_score": understanding.get("top1_prob"),
+                        "domain_hint": domain,
+                        "domain_scores": domain_scores,
+                        "domain_confidence": round(domain_conf, 4) if domain_conf else 0.0,
+                        "vision_engine": "local_neural_vision",
+                    }
+
+            # Case C: Offline Heuristic / CLIP Fallback
+            else:
+                if domain == "non_medical":
+                    return {
+                        "status": "unsupported_image",
+                        "message": "The uploaded image does not appear to be a supported medical image.",
+                        "type": "general_image",
+                        "category": "non_medical",
+                        "detected_category": "non_medical",
+                        "detected_subject": "Non-Medical Subject",
+                        "description": "Image features identified as non-medical content.",
+                        "is_person": False,
+                        "medical_applicable": False,
+                        "reason_not_applicable": "Non-medical imagery is outside medical intake scope.",
+                        "modality_source": "auto_detected",
+                        "disease": None,
+                        "score": 0.0,
+                        "confidence": 0.0,
+                        "predictions": [],
+                        "domain_hint": "non_medical",
+                        "domain_scores": domain_scores,
+                        "domain_confidence": round(domain_conf, 4) if domain_conf else 0.0,
+                        "vision_engine": "heuristic_fallback",
+                        "routing_decision": "NO AUTOMATIC MEDICAL ROUTE",
+                    }
+                elif domain in ("unknown", "ambiguous"):
+                    return {
+                        "status": "inconclusive",
+                        "message": "Image modality could not be reliably determined from visual features. Please select a specific modality or upload a clearer clinical image.",
+                        "category": "ambiguous",
+                        "detected_category": "ambiguous",
+                        "detected_subject": "Unrecognized Visual Subject",
+                        "description": "Image domain could not be reliably determined from visual features.",
+                        "is_person": False,
+                        "medical_applicable": False,
+                        "reason_not_applicable": "Image modality could not be reliably determined from visual features.",
+                        "modality_source": "auto_intake_abstention",
+                        "disease": None,
+                        "score": 0.0,
+                        "confidence": 0.0,
+                        "predictions": [],
+                        "domain_hint": domain,
+                        "domain_scores": domain_scores,
+                        "domain_confidence": round(domain_conf, 4) if domain_conf else 0.0,
+                        "vision_engine": "heuristic_fallback",
+                        "routing_decision": "NO AUTOMATIC MEDICAL ROUTE",
+                    }
+                else:
+                    # Ambiguous or potential medical domain without explicit user modality selection
+                    # SAFETY RULE: Never route to specialist models on colour/contrast or unvalidated visual heuristics without explicit selection.
+                    logger.info("Automatic medical intake abstention: explicit user modality selection required.")
+                    return {
+                        "status": "modality_selection_required",
+                        "success": False,
+                        "routing_decision": "NO AUTOMATIC MEDICAL ROUTE",
+                        "message": (
+                            "Automatic clinical routing is disabled to prevent unvalidated heuristic diagnosis. "
+                            "If this is a clinical image, please select the specific modality (Skin, X-ray, Retina) to proceed."
+                        ),
+                        "type": "medical_selection_required",
+                        "category": domain if domain != "unknown" else "ambiguous",
+                        "detected_category": "ambiguous",
+                        "detected_subject": "Unrecognized Visual Subject",
+                        "description": "Image domain could not be reliably determined without explicit modality selection.",
+                        "is_person": False,
+                        "medical_applicable": False,
+                        "reason_not_applicable": "Automatic medical routing is disabled; explicit user modality selection required.",
+                        "modality_source": "auto_intake_abstention",
+                        "disease": None,
+                        "score": 0.0,
+                        "confidence": 0.0,
+                        "predictions": [],
+                        "domain_hint": domain,
+                        "domain_scores": domain_scores,
+                        "domain_confidence": round(domain_conf, 4) if domain_conf else 0.0,
+                        "vision_engine": "heuristic_fallback",
+                    }
+
+        # ── 4. General Disease Model Scope Audit & Safety Guard ──
+        # The general disease model (DenseNet-121, 69 classes) is trained specifically on brain MRI,
+        # hematology microscopy, oral lesions, wounds/burns, and lung CT. Do not allow it to act
+        # as an arbitrary catch-all for unrelated medical imagery (e.g. ear endoscopy, ultrasound).
+        if target_category == "general" and understanding.get("engine") == "groq_vision":
+            subj_text = (
+                str(understanding.get("detected_subject", "")) + " " +
+                str(understanding.get("description", ""))
+            ).lower()
+            supported_keywords = [
+                "mri", "brain", "neuro", "blood", "microscop", "smear", "cell",
+                "wound", "burn", "ulcer", "lacerat", "cut", "dental", "tooth",
+                "teeth", "gingiv", "oral", "covid", "ct scan", "slide", "tissue"
+            ]
+            if not any(kw in subj_text for kw in supported_keywords):
+                logger.warning(
+                    "General model requested for unsupported medical subject: %s",
+                    understanding.get("detected_subject")
+                )
+                return {
+                    "status": "inconclusive",
+                    "message": (
+                        f"The uploaded medical image ({understanding.get('detected_subject', 'medical image')}) is outside the scope of our supported specialist models "
+                        "(Skin Dermatology, Bone/Chest X-ray, Retinal Fundus, Brain MRI, Blood Smear Microscopy, Wounds/Burns). "
+                        "Please consult a qualified medical specialist for clinical evaluation."
+                    ),
+                    "category": "unsupported_medical",
+                    "detected_subject": understanding.get("detected_subject"),
+                    "description": understanding.get("description"),
+                    "modality_source": modality_source,
+                    "disease": None,
+                    "score": 0.0,
+                    "confidence": 0.0,
+                    "calibrated_conf": None,
+                    "calibrated_confidence": None,
+                    "domain_hint": "general",
+                    "domain_scores": domain_scores,
+                    "domain_confidence": round(domain_conf, 4) if domain_conf else 0.0,
+                    "predictions": [],
+                    "vision_engine": understanding.get("engine", "vision_service"),
+                }
+
+        # ── 5. SAFETY INVARIANT GATE: Refuse specialist dispatch without explicit user modality selection ──
+        if (
+            modality_source != "user_selected"
+            or not routed_category
+            or not target_category
+            or target_category not in VALID_SPECIALIST_MODALITIES
+        ):
+            logger.warning("SAFETY INVARIANT ENFORCED: Refusing specialist dispatch without valid explicit user modality selection.")
+            p_status = understanding.get("person_detection", understanding.get("person_detection_status", "unsupported"))
+            raw_is_person = understanding.get("is_person")
+            is_person_val = True if raw_is_person is True else None if p_status == "unsupported" or raw_is_person is None else False
+            return {
+                "status": "modality_selection_required",
+                "success": False,
+                "routing_decision": "NO AUTOMATIC MEDICAL ROUTE",
+                "message": (
+                    "Automatic clinical routing is disabled to ensure patient safety. "
+                    "A valid explicit modality selection (Skin, X-ray, Retina, General) is required to invoke specialist models."
+                ),
+                "type": "medical_selection_required",
+                "category": target_category or "ambiguous",
+                "detected_category": "ambiguous",
+                "detected_subject": understanding.get("detected_subject", "Unrecognized Visual Subject"),
+                "description": understanding.get("description", "Image modality could not be determined without explicit user selection."),
+                "is_person": is_person_val,
+                "person_detection": p_status,
+                "person_detection_status": p_status,
+                "person_detection_note": understanding.get("person_detection_note", "Person presence could not be reliably determined."),
+                "medical_applicable": False,
+                "reason_not_applicable": "Automatic medical routing is disabled; explicit user modality selection required.",
+                "modality_source": "auto_intake_abstention",
+                "disease": None,
+                "score": 0.0,
+                "confidence": 0.0,
+                "predictions": [],
+                "domain_hint": domain,
+                "domain_scores": domain_scores,
+                "domain_confidence": round(domain_conf, 4) if domain_conf else 0.0,
+                "vision_engine": understanding.get("engine", "local_neural_vision"),
+            }
+
+        # ── 5b. CLINICAL GOVERNANCE GATE: Check whether specialist models are enabled ──
+        from app.core.config import is_clinical_specialist_enabled
+        if not is_clinical_specialist_enabled():
+            logger.info("Clinical specialist inference gate: unvalidated diagnostic models disabled in this environment.")
+            return {
+                "status": "clinical_analysis_disabled",
+                "success": False,
+                "type": "clinical_disabled",
+                "message": (
+                    "Clinical specialist analysis is disabled in this release pending formal clinical validation "
+                    "and regulatory review. General image recognition remains available."
+                ),
+                "category": target_category,
+                "modality_source": modality_source,
+                "clinical_governance_status": "NOT_CLINICALLY_VALIDATED",
+                "medical_applicable": False,
+                "safety_notice": "Unvalidated diagnostic specialist models are disabled by default in production.",
+                "disease": None,
+                "score": 0.0,
+                "confidence": 0.0,
+                "predictions": [],
+                "domain_hint": domain,
+                "domain_scores": domain_scores,
+                "domain_confidence": round(domain_conf, 4) if domain_conf else 0.0,
+                "vision_engine": understanding.get("engine", "local_neural_vision"),
+            }
+
+        # ── 5c. RESEARCH MODE CONFIRMATION GATE: Require explicit confirmation in non-production research mode ──
+        if not modality_confirmed:
+            logger.info("Research mode gate: explicit user modality confirmation required.")
+            p_status = understanding.get("person_detection", understanding.get("person_detection_status", "unsupported"))
+            raw_is_person = understanding.get("is_person")
+            is_person_val = True if raw_is_person is True else None if p_status == "unsupported" or raw_is_person is None else False
+            return {
+                "status": "modality_confirmation_required",
+                "success": False,
+                "type": "confirmation_required",
+                "message": (
+                    f"Explicit modality confirmation required for research evaluation of '{target_category}'. "
+                    "Please confirm that the uploaded image matches this medical modality and acknowledge "
+                    "that this is an unvalidated prototype model intended solely for research evaluation."
+                ),
+                "category": target_category,
+                "modality_source": "user_selected_unconfirmed",
+                "requires_confirmation": True,
+                "research_disclaimer": (
+                    "RESEARCH ONLY — NOT FOR CLINICAL USE: This prototype model has not undergone clinical trials, "
+                    "regulatory clearance, or formal medical device validation. Results must never be used for diagnosis, "
+                    "prognosis, or treatment decisions."
+                ),
+                "detected_category": understanding.get("category", "ambiguous"),
+                "detected_subject": understanding.get("detected_subject", "Medical Specimen"),
+                "description": understanding.get("description", "Awaiting explicit modality confirmation."),
+                "is_person": is_person_val,
+                "person_detection": p_status,
+                "person_detection_status": p_status,
+                "medical_applicable": False,
+                "reason_not_applicable": "Explicit modality confirmation required for research evaluation.",
+                "disease": None,
+                "score": 0.0,
+                "confidence": 0.0,
+                "predictions": [],
+                "domain_hint": domain,
+                "domain_scores": domain_scores,
+                "domain_confidence": round(domain_conf, 4) if domain_conf else 0.0,
+                "vision_engine": understanding.get("engine", "local_neural_vision"),
+            }
+
+        # ── 5d. PORTRAIT MEDICAL PROHIBITION: Ordinary portraits must never receive medical diagnosis ──
+        if understanding.get("category") == "person" or understanding.get("detected_subject") == "Portrait of Person":
+            logger.warning("SAFETY INVARIANT ENFORCED: Refusing medical diagnosis on portrait photograph.")
+            return {
+                "status": "unsupported_image",
+                "success": False,
+                "type": "general_image",
+                "category": "non_medical",
+                "detected_category": "person",
+                "detected_subject": "Portrait of Person",
+                "description": "A photograph depicting a human portrait. Personal identity and clinical disease inference are strictly prohibited.",
+                "message": "Personal identity and clinical disease inference are strictly prohibited on ordinary portraits. Photographs of people cannot be used for clinical medical diagnosis.",
+                "is_person": None,
+                "person_detection": "unsupported",
+                "person_detection_status": "unsupported",
+                "medical_applicable": False,
+                "reason_not_applicable": "This is an ordinary photograph of a person. Ordinary photographs cannot be used for clinical medical diagnosis.",
+                "safety_disclaimer": "Real-person facial recognition and medical disease inference are strictly prohibited on ordinary portraits.",
+                "disease": None,
+                "score": 0.0,
+                "confidence": 0.0,
+                "predictions": [],
+                "domain_hint": "non_medical",
+                "domain_scores": {"non_medical": 1.0},
+                "domain_confidence": 1.0,
+                "vision_engine": understanding.get("engine", "local_neural_vision"),
+            }
+
+        # ── 6. HARD MODALITY LOCK: Check model availability with lazy loading ──
+        model = self.get_specialist_model(target_category)
+        if not model or target_category not in self.models:
+            cat_display = {
+                "skin": "Skin / Dermatology",
+                "xray": "X-ray / Radiograph",
+                "retina": "Retinal Fundus",
+                "general": "General Medical",
+            }.get(target_category, target_category.title())
+            logger.warning(
+                "HARD MODALITY LOCK: Domain '%s' detected, but specialist model NOT LOADED or failed (status=%s). "
+                "Refusing unsafe fallback to general or other models.",
+                target_category,
+                self.model_status.get(target_category, "unavailable"),
+            )
+            return {
+                "status": "model_unavailable",
+                "message": (
+                    f"Specialist AI model for '{target_category}' is not loaded on this server. "
+                    f"The {cat_display} category was recognized, but the specialist deep learning analysis "
+                    "model is currently unavailable on this server. No disease classification was performed."
+                ),
+                "category": target_category,
+                "modality_source": modality_source,
+                "disease": None,
+                "score": 0.0,
+                "confidence": 0.0,
+                "calibrated_conf": None,
+                "calibrated_confidence": None,
+                "domain_hint": domain,
+                "domain_scores": domain_scores,
+                "domain_confidence": round(domain_conf, 4) if domain_conf else 0.0,
+                "predictions": [],
+                "symptom_interview_suggested": True,
+                "follow_up_prompt": f"Would you like to describe your symptoms or clinical history related to this {cat_display} condition in the chat for educational intake guidance?",
+            }
+
+        # ── 6. Execute ONLY the matching specialist model ──
+        try:
+            preds, raw_conf = model.predict(image)
+        except Exception as e:
+            logger.error("Inference error in '%s' specialist model: %s", target_category, type(e).__name__)
+
+            return {
+                "status": "inconclusive",
+                "message": f"An error occurred during {target_category} model inference.",
+                "category": target_category,
+                "modality_source": modality_source,
+                "disease": None,
+                "score": 0.0,
+                "confidence": 0.0,
+                "calibrated_conf": None,
+                "calibrated_confidence": None,
+                "domain_hint": domain,
+                "domain_scores": domain_scores,
+                "domain_confidence": round(domain_conf, 4) if domain_conf else 0.0,
+                "predictions": [],
+                "error": "Inference failure",
+            }
+
+        # ── 7. Safe, uncalibrated prediction interpretation ──
+        interp = self._interpret_predictions(target_category, preds, raw_conf)
+        interp["category"] = target_category
+        interp["modality_source"] = modality_source
+        interp["detected_subject"] = understanding.get("detected_subject")
+        interp["description"] = understanding.get("description")
+        interp["is_person"] = None
+        interp["person_detection"] = "unsupported"
+        interp["person_detection_status"] = "unsupported"
+        interp["modality_confirmed"] = True
+        interp["research_disclaimer"] = (
+            "RESEARCH PROTOTYPE ONLY — NOT FOR DIAGNOSTIC OR CLINICAL USE. "
+            "This analysis was performed in non-production research mode with explicit user modality confirmation."
+        )
+        interp["medical_applicable"] = True
+        interp["domain_hint"] = domain
+        interp["domain_scores"] = domain_scores
+        interp["domain_confidence"] = round(domain_conf, 4) if domain_conf else 0.0
+        interp["confidence"] = interp.get("score", 0.0)  # Deprecated alias for raw score
+        interp["calibrated_conf"] = None  # Deprecated
+        interp["calibrated_confidence"] = None  # Deprecated
+        interp["score_interpretation"] = "Unvalidated model score; not a calibrated clinical probability."
+        return interp
 
 
 # Module-level singleton

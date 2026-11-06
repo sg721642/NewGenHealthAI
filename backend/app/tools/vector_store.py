@@ -28,6 +28,15 @@ def get_embeddings():
     return _embeddings
 
 
+def is_vectorstore_available() -> bool:
+    """Return True if Chroma and langchain_community dependencies are installed and available."""
+    try:
+        from langchain_community.vectorstores import Chroma  # noqa: F401
+        return True
+    except (ImportError, ModuleNotFoundError):
+        return False
+
+
 def get_or_create_vectorstore(
     documents: Optional[List[Document]] = None,
     persist_dir: str = VECTOR_STORE_DIR,
@@ -38,7 +47,11 @@ def get_or_create_vectorstore(
     if _vectorstore is not None:
         return _vectorstore
 
-    from langchain_community.vectorstores import Chroma
+    try:
+        from langchain_community.vectorstores import Chroma
+    except (ImportError, ModuleNotFoundError) as e:
+        logger.warning("Vector store dependencies not installed (langchain_community/Chroma): %s", e)
+        return None
 
     embeddings = get_embeddings()
 

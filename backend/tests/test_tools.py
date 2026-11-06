@@ -148,6 +148,20 @@ def test_get_retriever():
         assert get_retriever() is None
 
 
+def test_is_vectorstore_available_both_scenarios():
+    from app.tools.vector_store import is_vectorstore_available
+
+    # Scenario 1: dependency missing (ModuleNotFoundError)
+    with patch.dict("sys.modules", {"langchain_community.vectorstores": None}):
+        assert is_vectorstore_available() is False
+
+    # Scenario 2: dependency available
+    mock_module = MagicMock()
+    mock_module.Chroma = MagicMock()
+    with patch.dict("sys.modules", {"langchain_community.vectorstores": mock_module}):
+        assert is_vectorstore_available() is True
+
+
 def test_split_documents():
     mock_doc = MagicMock()
     with patch('langchain_text_splitters.RecursiveCharacterTextSplitter') as mock_splitter_cls:

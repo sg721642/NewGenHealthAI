@@ -97,22 +97,27 @@ def test_get_session_id_no_header():
 
 def test_session_endpoints_coverage():
     from app.api.v1.endpoints.session import _get_session_id as _get_sid_s
+    from app.models.message import User
     mock_request = MagicMock(spec=Request)
     mock_request.headers = {}
     mock_request.session = {}
     sid = _get_sid_s(mock_request)
     assert sid is not None
 
-    with patch("app.api.v1.endpoints.session.db_service") as mock_db:
+    mock_user = User(id=1, username="testuser", hashed_password="pw")
+
+    with patch("app.api.v1.endpoints.session.db_service") as mock_db, \
+         patch("app.api.v1.endpoints.session.clinical_engine.delete_conversation", return_value=True):
         mock_db.get_all_sessions.return_value = []
         import asyncio
-        res = asyncio.run(get_sessions_endpoint(mock_request))
+        res = asyncio.run(get_sessions_endpoint(mock_request, current_user=mock_user))
         assert res["sessions"] == []
 
-        mock_db.delete_session.return_value = True
         mock_request.session = {"session_id": sid}
-        res_del = asyncio.run(delete_session_endpoint(sid, mock_request))
+        res_del = asyncio.run(delete_session_endpoint(sid, mock_request, current_user=mock_user))
         assert res_del["success"] is True
+
+
 
 
 def test_lifespan_no_pdf():

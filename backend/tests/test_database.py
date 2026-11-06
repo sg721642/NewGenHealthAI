@@ -1,4 +1,4 @@
-"""Tests for database service — Deep Modular Architecture"""
+"""Tests for database service — Explicit Owner Enforcement"""
 import os
 import sys
 
@@ -40,35 +40,74 @@ def setup_teardown_db():
 def test_save_and_get_message(setup_teardown_db):
     db = setup_teardown_db
     session_id = "sess_1"
+    user_id = 1
 
-    db.save_message(session_id, "user", "Hello World")
-    db.save_message(session_id, "assistant", "Hi there", "AI")
+    # Saving without user_id must raise ValueError (A01 enforcement)
+    with pytest.raises(ValueError):
+        db.save_message(session_id, "user", "Hello World", user_id=None)
 
-    history = db.get_chat_history(session_id)
+    # Saving to non-existent conversation must fail closed with PermissionError
+    with pytest.raises(PermissionError):
+        db.save_message(session_id, "user", "Hello World", user_id=user_id)
+
+    # Register conversation explicitly
+    db.create_conversation(user_id=user_id, session_id=session_id)
+
+    db.save_message(session_id, "user", "Hello World", user_id=user_id)
+    db.save_message(session_id, "assistant", "Hi there", "AI", user_id=user_id)
+
+    # Owner can retrieve history
+    history = db.get_chat_history(session_id, user_id=user_id)
+    assert history is not None
     assert len(history) == 2
     assert history[0]["content"] == "Hello World"
     assert history[1]["source"] == "AI"
 
+    # Non-owner receives None (404 behavior, no data disclosed)
+    assert db.get_chat_history(session_id, user_id=999) is None
+
 
 def test_get_all_sessions(setup_teardown_db):
     db = setup_teardown_db
+    user_a = 1
+    user_b = 2
 
-    db.save_message("sess_1", "user", "msg1")
-    db.save_message("sess_2", "user", "msg2")
+    db.create_conversation(user_id=user_a, session_id="sess_1")
+    db.create_conversation(user_id=user_a, session_id="sess_2")
+    db.create_conversation(user_id=user_b, session_id="sess_b")
 
-    sessions = db.get_all_sessions()
-    assert len(sessions) >= 2
+    db.save_message("sess_1", "user", "msg1", user_id=user_a)
+    db.save_message("sess_2", "user", "msg2", user_id=user_a)
+    db.save_message("sess_b", "user", "b_msg", user_id=user_b)
 
-    ids = [s["session_id"] for s in sessions]
-    assert "sess_1" in ids
-    assert "sess_2" in ids
+    sessions_a = db.get_all_sessions(user_id=user_a)
+    assert len(sessions_a) == 2
+    ids_a = [s["session_id"] for s in sessions_a]
+    assert "sess_1" in ids_a
+    assert "sess_2" in ids_a
+    assert "sess_b" not in ids_a
+
+    sessions_b = db.get_all_sessions(user_id=user_b)
+    assert len(sessions_b) == 1
+    assert sessions_b[0]["session_id"] == "sess_b"
+
+    # Anonymous call returns empty list, never all sessions
+    assert db.get_all_sessions(user_id=None) == []
 
 
 def test_delete_session(setup_teardown_db):
     db = setup_teardown_db
+    user_id = 1
 
-    db.save_message("sess_to_del", "user", "delete me")
-    assert len(db.get_chat_history("sess_to_del")) == 1
+    db.create_conversation(user_id=user_id, session_id="sess_to_del")
+    db.save_message("sess_to_del", "user", "delete me", user_id=user_id)
+    assert len(db.get_chat_history("sess_to_del", user_id=user_id)) == 1
 
-    db.delete_session("sess_to_del")
-    assert len(db.get_chat_history("sess_to_del")) == 0
+    # Other user cannot delete
+    assert db.delete_session("sess_to_del", user_id=999) is False
+    assert len(db.get_chat_history("sess_to_del", user_id=user_id)) == 1
+
+    # Owner can delete
+    assert db.delete_session("sess_to_del", user_id=user_id) is True
+    assert db.get_chat_history("sess_to_del", user_id=user_id) is None
+

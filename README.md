@@ -11,11 +11,11 @@ app_port: 7860
 
 # 🩺 NewGenHealthAI
 
-### An AI-powered Medical Consultation & Diagnostic Platform
+### An Educational and Research Healthcare AI Assistant Platform
 
 <br/>
 
-🚀 **Live Demo**
+🚀 **Live Demo on Hugging Face Spaces**
 
 [https://huggingface.co/spaces/sg721642/NewGenHealthAI](https://huggingface.co/spaces/sg721642/NewGenHealthAI)
 
@@ -27,19 +27,51 @@ app_port: 7860
 
 ---
 
-An AI-powered medical assistant with a FastAPI backend and a React frontend for conversational clinical guidance, session-based chat, and image-based disease analysis. Deployed and publicly accessible through Hugging Face Spaces.
+NewGenHealthAI is a full-stack educational and research healthcare AI assistant built with a FastAPI backend and a React + Vite frontend. It provides conversational health intake, image-based prototype observations, voice input/output, and robust session security.
 
-## Overview
+> [!WARNING]
+> **Clinical Safety & Research Prototype Disclaimer**
+> NewGenHealthAI is strictly designed for **educational, prototype, and research purposes only**. It does **NOT** provide medical diagnosis, treatment, physician consultations, or clinical decision-making. Model findings and chat outputs are uncalibrated experimental outputs and must never replace qualified clinical judgment by a licensed medical professional. In an emergency, immediately contact your local emergency services (e.g. 911 in US/CA, 999 in UK, 112 in India/EU) or a crisis hotline.
 
-NewGenHealthAI is a full-stack healthcare AI application designed to support medical interaction workflows through:
+---
 
-* conversational AI assistance
-* image-based disease analysis
-* session-based chat history
-* diagnostics and model inspection utilities
-* containerized deployment with Docker
+## Architecture Overview
 
-The project is organized as a monorepo with separate backend and frontend applications.
+```
+                                      ┌─────────────────────────────────┐
+                                      │   React 19 + Vite + DaisyUI     │
+                                      │   Single Page Application (SPA) │
+                                      └────────────────┬────────────────┘
+                                                       │
+                                  Bearer Token Auth / TLS (HTTP & Streaming)
+                                                       │
+                                                       ▼
+┌───────────────────────────────────────────────────────────────────────────────────────────────┐
+│ FastAPI Backend Application                                                                   │
+├──────────────────────────────┬───────────────────────────────┬────────────────────────────────┤
+│ Security & Isolation Layer   │ Clinical Workflow (LangGraph) │ Multimodal AI Engines          │
+│ • Centralized Auth (Bearer)  │ • Bounded Acyclic DAG Routing │ • Hard Modality Vision Lock   │
+│ • Argon2id Password Hashing  │ • Pure Offline Emergency Gate │   (Skin, X-ray, Retina, Gen)   │
+│ • SHA-256 Token Storage      │ • Single-visit node budget    │ • Normal/Anatomy Preservation  │
+│ • Bounded Rate Limiting      │ • 90s Consultation Deadline   │ • Decompression Bomb Limits    │
+│ • Trusted Reverse Proxies    │ • No Physician Impersonation  │ • EXIF Metadata Stripping      │
+│ • Conversation Lock Manager  │ • No Forced Diagnosis/Dosages │ • Lazy On-Demand Checkpoints   │
+│ • Generational Race Guards   │ • Citations with Provenance   │ • Inference Capacity Semaphore │
+├──────────────────────────────┴───────────────────────────────┴────────────────────────────────┤
+│ Voice Processing Pipeline                                                                     │
+│ • Chunked Upload (500B..10MB) & Container Magic Byte Validation (WAV, WebM, OGG, MP3, M4A)    │
+│ • Private Temporary Files (0o700/0o600) with Deterministic Cleanup in finally:                │
+│ • Non-Blocking AsyncGroq (timeout=15s) with Overall Deadline (30s) & Whisper Fallback         │
+│ • Process-Local Voice Capacity Manager (STT=3, TTS=5, wait timeout=5.0s, per-user limit=1)   │
+│ • Hardened Edge TTS Streaming (2..2000 chars, markdown stripping, neural voice allowlists)    │
+├───────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Persistence Layer                                                                             │
+│ • SQLite in WAL Mode with Online Backup API and PRAGMA integrity_check                        │
+│ • Step-wise Atomic Schema Migrations (v1: conversations & quarantine; v2: SHA-256 sessions)   │
+└───────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
 
 ## Repository Structure
 
@@ -47,274 +79,177 @@ The project is organized as a monorepo with separate backend and frontend applic
 NewGenHealthAI/
 ├── backend/
 │   ├── app/
-│   ├── test_images/
-│   ├── tests/
-│   ├── .flake8
-│   ├── Dockerfile
-│   ├── inspect_models.py
-│   ├── pyproject.toml
-│   ├── pytest.ini
-│   ├── requirements.txt
-│   ├── test_api.py
-│   └── test_clip_routing.py
+│   │   ├── api/v1/          # Endpoints (auth, chat, image, voice, sessions, health)
+│   │   ├── core/            # Configuration, dependencies, security, urgent care
+│   │   ├── db/              # SQLite migrations, backup API, schemas
+│   │   ├── models/          # SQLAlchemy ORM models (User, Session, Conversation)
+│   │   ├── services/        # Chat service, clinical engine, disease classifiers
+│   │   └── tools/           # Audio & image preprocessing, capacity managers
+│   ├── tests/               # 285+ pytest unit, security, concurrency, and API tests
+│   ├── Dockerfile           # Standalone backend container definition
+│   ├── pyproject.toml       # Backend packaging and dependency definitions
+│   └── requirements.txt     # Python production and test dependencies
 ├── frontend/
-│   ├── public/
-│   ├── src/
-│   ├── .gitignore
-│   ├── Dockerfile
-│   ├── README.md
-│   ├── eslint.config.js
-│   ├── index.html
-│   ├── nginx.conf
-│   ├── package-lock.json
-│   ├── package.json
-│   ├── postcss.config.js
-│   ├── tailwind.config.js
-│   └── vite.config.js
-├── .env.example
-├── Dockerfile
-├── check_model_on_image.py
-├── diagnose_env.py
-├── run.py
-├── run_medai.bat
-└── .gitignore
+│   ├── src/                 # React 19 application components and integration tests
+│   ├── public/              # Static assets (favicon.svg)
+│   ├── Dockerfile           # Standalone frontend container definition (Nginx SPA)
+│   ├── nginx.conf           # Standalone Nginx reverse proxy configuration
+│   ├── package.json         # Frontend dependencies and build scripts
+│   └── vite.config.js       # Vite configuration with integrated and standalone modes
+├── docs/                    # Authoritative engineering documentation & test evidence
+├── .dockerignore            # Container build exclusion rules
+├── .env.example             # Comprehensive environment variable documentation
+├── Dockerfile               # Root multi-stage unified Dockerfile (Hugging Face Spaces)
+├── run.py                   # Hardened local development launcher
+└── run_medai.bat            # Windows launcher helper
 ```
 
-## Features
-
-* AI-powered medical assistant interface
-* FastAPI backend API
-* React + Vite frontend
-* Session-based conversation history
-* Medical image analysis endpoint
-* Model diagnostics endpoint
-* Local testing utilities for medical images
-* Docker support for deployment
-* Environment-based configuration
-
-## Tech Stack
-
-### Backend
-
-* Python
-* FastAPI
-* Uvicorn
-* LangChain / LangGraph
-* ChromaDB
-* Sentence Transformers
-* Hugging Face Transformers
-* PyTorch
-* SQLAlchemy
-
-### Frontend
-
-* React
-* Vite
-* Tailwind CSS
-* DaisyUI
+---
 
 ## Environment Variables
 
-Create a `.env` file in the project root based on `.env.example`.
+Copy `.env.example` to `.env` and configure your credentials. Key parameters include:
 
-Required variables include:
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `SESSION_SECRET_KEY` | **Yes** | — | Cryptographic secret for session cookie signing (min 32 chars) |
+| `GROQ_API_KEY` | **Yes** | — | Groq API key for LLaMA-3 clinical LLM and Whisper STT |
+| `TAVILY_API_KEY` | Optional | — | Tavily API key for medical web search fallback |
+| `CONSULTATION_TIMEOUT_SECONDS` | Optional | `90.0` | Wall-clock consultation timeout in seconds |
+| `MAX_IMAGE_UPLOAD_BYTES` | Optional | `5242880` (5MB) | Maximum compressed image upload size |
+| `MAX_AUDIO_UPLOAD_BYTES` | Optional | `10485760` (10MB) | Maximum audio upload size |
+| `MAX_CONCURRENT_INFERENCE` | Optional | `2` | Process-local specialist vision inference semaphore |
+| `MAX_CONCURRENT_STT` | Optional | `3` | Process-local STT transcription semaphore |
+| `MAX_CONCURRENT_TTS` | Optional | `5` | Process-local TTS speech synthesis semaphore |
+| `ALLOW_MODEL_DOWNLOADS` | Optional | `false` | Blocks implicit multi-GB downloads from remote hubs |
 
-```env
-GROQ_API_KEY=your_groq_api_key_here
-TAVILY_API_KEY=your_tavily_api_key_here
-SESSION_SECRET_KEY=your_session_secret_key_here
-```
+---
 
-Optional path overrides may also be configured for logs, database, vector store, and PDF sources.
+## Local Development Quick Start
 
-## Installation
+### Option 1: Root Development Launcher (Recommended)
 
-### 1. Clone the repository
+From the project root:
 
 ```bash
-git clone https://github.com/sg721642/NewGenHealthAI.git
-cd NewGenHealthAI
+# Start backend and frontend with auto-setup
+python run.py
+
+# Or explicitly install/update dependencies:
+python run.py --install-deps
 ```
 
-### 2. Backend setup
+The launcher:
+1. Resolves paths relative to `__file__` without relying on working directory state.
+2. Checks environment without `shell=True` or version spoofing hacks.
+3. Starts the backend on `http://127.0.0.1:8000` with hot-reloading.
+4. Waits for the `/api/v1/health` endpoint to report healthy.
+5. Launches the Vite development server on `http://localhost:5173`.
+6. Traps `SIGINT` (Ctrl+C) and cleanly terminates all child processes without leaving orphaned background workers.
 
+### Option 2: Running Services Separately
+
+**Backend:**
 ```bash
 cd backend
-python -m venv .venv
-```
-
-Activate the virtual environment:
-
-**Windows**
-
-```bash
-.venv\Scripts\activate
-```
-
-**Linux / macOS**
-
-```bash
-source .venv/bin/activate
-```
-
-Install dependencies:
-
-```bash
+python -m venv .venv && source .venv/bin/activate  # Or .venv\Scripts\activate on Windows
 pip install -r requirements.txt
+uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-### 3. Frontend setup
-
-Open a new terminal:
-
+**Frontend:**
 ```bash
 cd frontend
 npm install
-```
-
-## Running the Project
-
-### Option 1: Start with the root launcher
-
-From the project root folder:
-
-```bash
-python run.py
-```
-
-This script:
-
-* creates a virtual environment if needed
-* installs backend dependencies
-* installs frontend dependencies
-* starts the backend on port `8000`
-* waits for the backend health endpoint
-* launches the frontend development server
-
-### Option 2: Run backend and frontend separately
-
-#### Start backend
-
-```bash
-cd backend
-uvicorn app.main:app --reload --port 8000
-```
-
-#### Start frontend
-
-```bash
-cd frontend
 npm run dev
 ```
 
-## API Endpoints
+---
 
-Some important backend routes include:
+## Building & Containerization
 
-* `GET /api/v1/health` — backend health check
-* `GET /api/v1/diagnostics` — loaded model diagnostics
-* `POST /api/v1/analyze-image` — upload an image for analysis
-
-Depending on your backend router definitions, additional chat and session endpoints are also available.
-
-## Testing
-
-### Backend tests
-
-Run pytest inside the backend folder:
-
-```bash
-cd backend
-pytest
-```
-
-### Image API test script
-
-```bash
-cd backend
-python test_api.py
-```
-
-### CLIP routing verification
-
-```bash
-cd backend
-python test_clip_routing.py
-```
-
-These scripts test image classification and verify that domain routing works correctly for sample images such as skin, xray, and retina inputs.
-
-## Docker
-
-Dockerfiles are included for:
-
-* project root
-* backend
-* frontend
-
-You can use them to build and containerize the entire application or individual services depending on your deployment setup.
-
-## Frontend
-
-The frontend is built with React and Vite and provides:
-
-* chat-based interaction
-* conversation history
-* a clean medical assistant interface
-
-To create a production build:
-
+### 1. Integrated Build (Default)
+Outputs static assets into `backend/app/static/` so FastAPI serves the SPA directly:
 ```bash
 cd frontend
 npm run build
 ```
 
-To preview the production build locally:
-
+### 2. Standalone Frontend Build
+Outputs static assets into `frontend/dist/` for standalone Nginx hosting:
 ```bash
-npm run preview
+cd frontend
+npm run build:standalone
 ```
 
-## Utilities
+### 3. Docker Deployment Options
 
-The project also includes utility scripts such as:
+* **Unified Image (Hugging Face Spaces):**
+  Uses root `Dockerfile` (multi-stage: Node build → Python runtime, port 7860, non-root user UID 1000):
+  ```bash
+  docker build -t newgenhealthai:latest .
+  docker run -p 7860:7860 -e SESSION_SECRET_KEY="your-32-char-secret" -e GROQ_API_KEY="your-key" newgenhealthai:latest
+  ```
 
-* `check_model_on_image.py` — test model behavior on a single image
-* `diagnose_env.py` — inspect environment setup and issues
-* `inspect_models.py` — inspect backend model loading/configuration
-* `run_medai.bat` — Windows launcher helper
+* **Standalone Frontend Container:**
+  Uses `frontend/Dockerfile` with Nginx reverse proxy on port 80:
+  ```bash
+  cd frontend
+  docker build -t newgenhealthai-frontend:latest .
+  docker run -p 80:80 newgenhealthai-frontend:latest
+  ```
 
-## Use Cases
+* **Standalone Backend Container:**
+  Uses `backend/Dockerfile` running Uvicorn on port 8000:
+  ```bash
+  cd backend
+  docker build -t newgenhealthai-backend:latest .
+  docker run -p 8000:8000 newgenhealthai-backend:latest
+  ```
 
-* AI-assisted symptom guidance
-* educational medical assistant demos
-* image-based disease analysis workflows
-* research prototypes for healthcare AI systems
+---
 
-## Disclaimer
+## Testing & Quality Assurance
 
-This project is intended for educational, research, and prototype purposes only.
+### Full Backend Test Suite (Pytest)
+```bash
+pytest backend/tests/ -v
+```
+Runs 285+ automated tests across 20 modules verifying:
+* Centralized authentication & ownership isolation (`test_security_ownership.py`, `test_auth_hardening.py`)
+* Concurrency, locking & clinical memory rehydration (`test_phase1d_concurrency.py`)
+* Image validation, modality lock & safe inference (`test_phase2a_image_classifier.py`, `test_phase3a_image_security.py`)
+* Bounded clinical workflow, urgent care gate & response safety (`test_phase2b_workflow_safety.py`, `test_phase2b1_corrections.py`)
+* Voice upload bounds, temporary file isolation, AsyncGroq, capacity manager & TTS streaming (`test_phase3b_voice_security.py`)
 
-It must not be used as a replacement for licensed medical diagnosis, treatment, or professional clinical judgment.
+### Frontend Test Suite (Vitest)
+```bash
+npm --prefix frontend test -- --run
+```
+
+### Frontend Linter
+```bash
+npm --prefix frontend run lint
+```
+
+---
 
 ## Contributors
 
-* Satyam Gupta
-* Khagesh Ranjan
-* Sudipto Ghosh
-* Ajitesh Baghel
-* Yuvraj Singh
+* **Satyam Gupta** (First-Party Maintainer)
+* **Khagesh Ranjan**
+* **Sudipto Ghosh**
+* **Ajitesh Baghel**
+* **Yuvraj Singh**
 
-## License
+---
 
-Add your preferred license here, for example:
+## License & Intellectual Property
 
-```text
-MIT License
-```
+This project is a university/research healthcare prototype. All rights reserved by the original project contributors. Formal open-source licensing terms are pending decision by first-party maintainer Satyam Gupta.
 
-If you have not chosen one yet, create a `LICENSE` file before publishing for open-source reuse.
+---
 
 ## Acknowledgments
 
-Special thanks to the mentor, contributors, and open-source communities behind FastAPI, React, Vite, Hugging Face, LangChain, and related AI tooling.
+Special thanks to the open-source communities behind FastAPI, React, Vite, Hugging Face, LangChain, Groq, and PyTorch.

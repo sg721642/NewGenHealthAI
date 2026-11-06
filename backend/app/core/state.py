@@ -28,13 +28,25 @@ class AgentState(TypedDict):
     current_tool: Optional[str]
     retry_count: int
 
-    # ── Clinical Triage (Follow-Up Questions) ──────────────────────
-    triage_status: Optional[str]        # "needs_info" | "ready_to_diagnose" | None
+    # ── Clinical Triage (Follow-Up Questions & Fact Store) ─────────
+    triage_status: Optional[str]        # "needs_info" | "ready_to_diagnose" | "urgent_risk" | None
     triage_round: int                   # how many Q&A rounds so far (max 3)
     collected_symptoms: List[str]       # accumulated patient details across turns
     questions_asked: List[str]          # exact questions already asked (to avoid repeats)
     follow_up_data: Optional[Dict[str, Any]]  # structured follow-up for frontend chips
+    pending_follow_up_data: Optional[Dict[str, Any]]  # active follow-up contract from previous turn
+    clinical_facts: Dict[str, Any]      # structured clinical fact store across turns
     is_medical_query: bool              # whether planner flagged this as medical
+
+    # ── Phase 2B: Urgent Risk & Bounded Workflow Safeguards ─────────
+    is_urgent: bool                     # whether acute red flag emergency was detected
+    urgent_advisory: Optional[str]      # deterministic emergency message
+    urgent_category: Optional[str]      # e.g. "cardiac", "stroke", "respiratory", etc.
+    attempted_providers: List[str]      # tracks visited tools to enforce single-visit budget per turn
+    fallback_history: List[str]         # sequential log of provider fallback transitions
+    is_failed_generation: bool          # whether all providers failed (service unavailable)
+    exhaustion_reason: Optional[str]    # reason for provider exhaustion
+    uncertainty_acknowledged: bool      # whether clinical uncertainty is explicitly acknowledged
 
 
 def initialize_conversation_state() -> AgentState:
@@ -62,12 +74,26 @@ def initialize_conversation_state() -> AgentState:
         "collected_symptoms": [],
         "questions_asked": [],
         "follow_up_data": None,
+        "pending_follow_up_data": None,
+        "clinical_facts": {},
         "is_medical_query": False,
+        # Phase 2B Safeguards
+        "is_urgent": False,
+        "urgent_advisory": None,
+        "urgent_category": None,
+        "attempted_providers": [],
+        "fallback_history": [],
+        "is_failed_generation": False,
+        "exhaustion_reason": None,
+        "uncertainty_acknowledged": False,
     }
 
 
 def reset_query_state(state: AgentState) -> AgentState:
-    """Reset per-query flags while preserving conversation history and triage context."""
+    """Reset per-query flags while preserving conversation history, clinical facts, and triage context."""
+    # Preserve prior turn's follow_up_data as pending_follow_up_data so triage can validate user's reply
+    pending_follow_up = state.get("follow_up_data") or state.get("pending_follow_up_data")
+    facts = state.get("clinical_facts", {})
     state.update(
         {
             "question": "",
@@ -85,10 +111,21 @@ def reset_query_state(state: AgentState) -> AgentState:
             "tavily_success": False,
             "current_tool": None,
             "retry_count": 0,
-            # Keep triage_round and collected_symptoms across turns!
-            # Only reset follow_up_data and triage_status per query
+            # Keep triage_round, collected_symptoms, and clinical_facts across turns!
+            # Preserve pending follow-up question/options contract
             "triage_status": None,
             "follow_up_data": None,
+            "pending_follow_up_data": pending_follow_up,
+            "clinical_facts": facts,
+            # Reset per-query Phase 2B flags
+            "is_urgent": False,
+            "urgent_advisory": None,
+            "urgent_category": None,
+            "attempted_providers": [],
+            "fallback_history": [],
+            "is_failed_generation": False,
+            "exhaustion_reason": None,
+            "uncertainty_acknowledged": False,
         }
     )
     return state

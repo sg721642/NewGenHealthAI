@@ -17,10 +17,10 @@ model.classifier[1] = nn.Linear(
     NUM_CLASSES
 )
 
-# Load trained weights
-model.load_state_dict(
-    torch.load("app/models/skin_disease_model.pth", map_location="cpu")
-)
+# Load trained weights with safe weights_only=True
+_ckpt = torch.load("app/models/skin_disease_model.pth", map_location="cpu", weights_only=True)
+_state_dict = _ckpt.get("model_state_dict", _ckpt) if isinstance(_ckpt, dict) else _ckpt
+model.load_state_dict(_state_dict)
 
 model.eval()
 

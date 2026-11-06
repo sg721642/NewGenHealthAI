@@ -16,7 +16,6 @@ Module layout:
 """
 
 import os
-import secrets
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -27,7 +26,14 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from app.api.v1.api import api_router
 from app.api.image_api import router as image_router
-from app.core.config import CHAT_DB_PATH, PDF_PATH, VECTOR_STORE_DIR
+from app.core.config import (
+    ALLOWED_ORIGINS,
+    CHAT_DB_PATH,
+    ENVIRONMENT,
+    PDF_PATH,
+    SESSION_SECRET_KEY,
+    VECTOR_STORE_DIR,
+)
 from app.core.logging_config import logger
 from app.services.chat_service import clinical_engine
 from app.services.database_service import db_service
@@ -90,11 +96,25 @@ app = FastAPI(
 
 
 # ─────────────────────────────────────────────────────────────
+# Session Secret Key & Production Validation
+# ─────────────────────────────────────────────────────────────
+_session_secret = SESSION_SECRET_KEY
+if ENVIRONMENT == "production":
+    if not _session_secret or len(_session_secret) < 32:
+        raise RuntimeError(
+            "SESSION_SECRET_KEY must be configured with at least 32 characters in production."
+        )
+elif not _session_secret:
+    # Stable default key for local development and test suite
+    _session_secret = "dev-insecure-secret-key-at-least-32-chars-long-ngh"
+
+
+# ─────────────────────────────────────────────────────────────
 # Middleware
 # ─────────────────────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -102,7 +122,11 @@ app.add_middleware(
 
 app.add_middleware(
     SessionMiddleware,
-    secret_key=secrets.token_hex(32)
+    secret_key=_session_secret,
+    session_cookie="ngh_session",
+    max_age=86400,
+    same_site="lax",
+    https_only=(ENVIRONMENT == "production"),
 )
 
 
@@ -132,12 +156,25 @@ if os.path.exists(static_dir):
         if full_path.startswith("api/") or full_path.startswith("image/"):
             from fastapi import HTTPException
             raise HTTPException(status_code=404, detail="Not Found")
-        
+
+        # Directly serve static assets located in static_dir (e.g. favicon.svg, vite.svg)
+        target_asset = os.path.join(static_dir, full_path)
+        if full_path and os.path.isfile(target_asset):
+            return FileResponse(target_asset)
+
+        # Fallback for browser /favicon.ico request: serve existing favicon.svg
+        if full_path == "favicon.ico":
+            svg_path = os.path.join(static_dir, "favicon.svg")
+            if os.path.isfile(svg_path):
+                return FileResponse(svg_path, media_type="image/svg+xml")
+            from fastapi import Response
+            return Response(status_code=204)
+
         # Otherwise, serve the React index.html for client-side routing
         index_path = os.path.join(static_dir, "index.html")
         if os.path.exists(index_path):
             return FileResponse(index_path)
-        
+
         return {"detail": "Frontend not found. Please build the frontend first."}
 else:
     logger.warning("Static directory not found at %s. Frontend will not be served.", static_dir)
