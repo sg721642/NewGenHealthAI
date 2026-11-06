@@ -34,10 +34,13 @@ COPY backend/ /app/backend/
 # Copy built frontend from Stage 1 to the backend's static directory
 COPY --from=frontend-builder /app/frontend/dist /app/backend/app/static
 
-# Set environment variables
+# Set production environment defaults
 ENV PYTHONPATH=/app/backend
 ENV PYTHONUNBUFFERED=1
 ENV HF_HOME=/tmp/huggingface
+ENV ENVIRONMENT=production
+ENV ALLOWED_ORIGINS=https://sg721642-newgenhealthai.hf.space,http://localhost:7860
+ENV TRUSTED_PROXIES=127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12
 ENV ALLOW_MODEL_DOWNLOADS=false
 
 # Create necessary directories and set ownership for non-root user
