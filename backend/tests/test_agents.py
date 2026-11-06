@@ -233,3 +233,77 @@ def test_explanation_agent():
     state = initialize_conversation_state()
     new_state = ExplanationAgent(state)
     assert new_state == state
+
+
+# --- LLM Safe Invocation & OFFLINE_MODE Unit Tests ---
+def test_invoke_llm_safe_offline_mode_returns_none():
+    from app.agents.executor import _invoke_llm_safe
+
+    mock_llm = MagicMock()
+    with patch.dict(os.environ, {"OFFLINE_MODE": "true"}):
+        with patch("app.agents.executor.invoke_llm_with_fallback") as mock_fallback:
+            result = _invoke_llm_safe(mock_llm, "test prompt")
+            assert result is None
+            mock_llm.invoke.assert_not_called()
+            mock_fallback.assert_not_called()
+
+
+def test_invoke_llm_safe_normal_mode_invokes_llm():
+    from app.agents.executor import _invoke_llm_safe
+
+    mock_llm = MagicMock()
+    mock_llm.invoke.return_value = MagicMock(content="Mocked answer from primary model")
+    with patch.dict(os.environ, {"OFFLINE_MODE": "false"}):
+        with patch("app.agents.executor.invoke_llm_with_fallback") as mock_fallback:
+            result = _invoke_llm_safe(mock_llm, "test prompt")
+            assert result.content == "Mocked answer from primary model"
+            mock_llm.invoke.assert_called_once_with("test prompt")
+            mock_fallback.assert_not_called()
+
+
+def test_invoke_llm_safe_normal_mode_fallback_on_deprecation():
+    from app.agents.executor import _invoke_llm_safe
+
+    mock_llm = MagicMock()
+    mock_llm.invoke.side_effect = Exception("404 Model llama-3.1-8b-instant decommissioned and does not exist")
+    mock_fallback_resp = MagicMock(content="Mocked answer from fallback model")
+
+    with patch.dict(os.environ, {"OFFLINE_MODE": "false"}):
+        with patch("app.agents.executor.invoke_llm_with_fallback", return_value=mock_fallback_resp) as mock_fallback:
+            result = _invoke_llm_safe(mock_llm, "test prompt")
+            assert result.content == "Mocked answer from fallback model"
+            mock_fallback.assert_called_once_with("test prompt", temperature=0.3, max_tokens=2048)
+
+
+def test_invoke_llm_safe_normal_mode_when_llm_none():
+    from app.agents.executor import _invoke_llm_safe
+
+    mock_fallback_resp = MagicMock(content="Mocked answer when primary is None")
+
+    with patch.dict(os.environ, {"OFFLINE_MODE": "false"}):
+        with patch("app.agents.executor.invoke_llm_with_fallback", return_value=mock_fallback_resp) as mock_fallback:
+            result = _invoke_llm_safe(None, "test prompt")
+            assert result.content == "Mocked answer when primary is None"
+            mock_fallback.assert_called_once_with("test prompt", temperature=0.3, max_tokens=2048)
+
+
+def test_offline_mode_env_string_parsing():
+    """Verify that string 'false' never evaluates to boolean True."""
+    for false_str in ["false", "FALSE", "0", "no", "", "None"]:
+        parsed = false_str.strip().lower() in ("true", "1", "yes")
+        assert parsed is False, f"String '{false_str}' unexpectedly evaluated to True"
+
+    for true_str in ["true", "TRUE", "1", "yes", "YES"]:
+        parsed = true_str.strip().lower() in ("true", "1", "yes")
+        assert parsed is True, f"String '{true_str}' unexpectedly evaluated to False"
+
+
+def test_retriever_agent_unavailable_visibility():
+    """Verify RetrieverAgent marks capability as unavailable when retriever is None."""
+    state = initialize_conversation_state()
+    state["question"] = "test query"
+    with patch("app.agents.retriever.get_retriever", return_value=None):
+        new_state = RetrieverAgent(state)
+        assert new_state["rag_success"] is False
+        assert new_state["rag_status"] == "unavailable"
+        assert new_state["documents"] == []

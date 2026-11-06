@@ -343,6 +343,18 @@ def test_canonical_frontend_entry_html():
     assert "MediGenius" not in content
 
 
+def test_favicon_ico_route_serving():
+    """Verifies that /favicon.ico is served cleanly (HTTP 200 SVG or 204) rather than 404."""
+    from fastapi.testclient import TestClient
+    from app.main import app
+
+    client = TestClient(app)
+    resp = client.get("/favicon.ico")
+    assert resp.status_code in (200, 204)
+    if resp.status_code == 200:
+        assert "image/svg+xml" in resp.headers.get("content-type", "")
+
+
 def test_vite_standalone_build_output_config():
     """Verifies vite.config.js and package.json support standalone build mode."""
     base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

@@ -29,6 +29,8 @@ dist/
 backend/logs/
 backend/storage/chat_db/
 backend/storage/vector_store/
+backend/tests/
+backend/scripts/
 
 # macOS metadata
 .DS_Store

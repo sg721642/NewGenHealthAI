@@ -1,6 +1,8 @@
+import os
 import re
 from typing import List
 
+from app.core.config import OFFLINE_MODE, is_offline_mode
 from app.core.logging_config import logger
 from app.core.state import AgentState
 from app.tools.llm_client import get_llm, invoke_llm_with_fallback
@@ -15,6 +17,8 @@ def sanitize_emergency_numbers(text: str) -> str:
     """Ensure India emergency numbers (112 / 108) are prioritized and rogue 911 mentions without locale are clarified."""
     if not text:
         return ""
+    if not isinstance(text, str):
+        text = str(text)
     # If text says 'call 911' or 'dial 911' without mentioning 112 or 108:
     if re.search(r"\b(?:call|dial)\s+911\b", text, re.IGNORECASE) and not re.search(r"\b112\b", text):
         text = re.sub(
@@ -89,6 +93,10 @@ def _format_provenance_citations(documents: List) -> str:
 
 def _invoke_llm_safe(llm, prompt: str, temperature: float = 0.3, max_tokens: int = 2048):
     """Safely invoke an available or mocked LLM with automatic model-fallback resilience."""
+    if is_offline_mode():
+        logger.info("_invoke_llm_safe: OFFLINE_MODE active; skipping external LLM invocation")
+        return None
+
     if llm is not None:
         try:
             return llm.invoke(prompt)

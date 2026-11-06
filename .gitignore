@@ -40,10 +40,11 @@ backend/app/static/
 
 # Environment variables
 .env
-.env.local
-.env.production
-.env.development
-.env.staging
+.env.*
+**/.env
+**/.env.*
+backend/.env
+backend/.env.*
 
 # OS files
 .DS_Store
@@ -57,3 +58,10 @@ NewGenHealthAI_Antigravity_Master_Plan.md
 node_modules/
 scratch/
 
+# Exclude unreviewed clinical accessions and portrait photographs from public repository commits
+# until formal institutional ethics / patient consent / personality rights reviews are complete.
+backend/tests/fixtures/genuine_clinical_images/
+backend/tests/fixtures/genuine_everyday_images/portrait.jpg
+backend/tests/fixtures/genuine_everyday_images/originals/
+backend/tests/fixtures/genuine_everyday_images/derived-images/
+backend/tests/fixtures/browser_evidence/

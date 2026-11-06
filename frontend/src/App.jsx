@@ -642,6 +642,7 @@ export default function App() {
     formData.append('file', file);
     if (selectedModality && selectedModality !== 'auto') {
       formData.append('modality', selectedModality);
+      formData.append('modality_confirmed', 'true');
     }
 
     try {
@@ -677,12 +678,108 @@ export default function App() {
         };
         setMessages((prev) => [...prev, botMsg]);
         await loadSessions();
+      } else if (data.status === 'general_recognition') {
+        let result = `## Universal Image Recognition\n\n`;
+        if (data.detected_subject) {
+          result += `**Detected Subject:** ${data.detected_subject}\n\n`;
+        }
+        if (data.top1_class) {
+          const rawScoreStr = typeof data.raw_score === 'number'
+            ? data.raw_score.toFixed(4)
+            : (typeof data.top1_prob === 'number' ? data.top1_prob.toFixed(4) : null);
+          result += `**Classification:** ${data.top1_class}${rawScoreStr ? ` (Raw score: ${rawScoreStr})` : ''}\n\n`;
+        }
+        if (data.description) {
+          result += `**Visual Description:** ${data.description}\n\n`;
+        }
+        result += `> **Medical Analysis:** Not applicable (Non-Medical Image).\n`;
+        if (data.is_person === true) {
+          result += `> *This photograph depicts an ordinary person. Ordinary photographs cannot be used for clinical medical diagnosis. No facial identification or disease inference was performed.*\n\n`;
+        } else if (data.person_detection_status === 'unsupported' || data.is_person === null || (data.top1_class === 'suit' && !data.is_person)) {
+          result += `> *Person detection: Unsupported / Unknown (object classifier top feature: ${data.top1_class || 'features'}). Person presence could not be reliably determined and this does not confirm absence of a person. Biometric or demographic inference is strictly prohibited.*\n\n`;
+        } else if (data.category === 'animal') {
+          result += `> *This image depicts an animal. Veterinary images are outside the scope of human medical intake.*\n\n`;
+        } else if (data.reason_not_applicable) {
+          result += `> *${data.reason_not_applicable}*\n\n`;
+        } else {
+          result += `> *Everyday non-medical objects and scenes are not applicable for clinical diagnostic models.*\n\n`;
+        }
+        if (data.safety_disclaimer) {
+          result += `*Safety Policy: ${data.safety_disclaimer}*\n\n`;
+        }
+        if (data.vision_engine) {
+          result += `*Analysis Engine: ${data.vision_engine === 'groq_vision' ? 'Multimodal Vision AI' : 'Deterministic Visual Features'}*\n`;
+        }
+        const botMsg = {
+          type: 'assistant',
+          content: result,
+          timestamp: new Date().toLocaleTimeString(),
+          source: 'Vision Service',
+        };
+        setMessages((prev) => [...prev, botMsg]);
+        await loadSessions();
+      } else if (data.status === 'modality_confirmation_required') {
+        let result = `## Research Modality Confirmation Required\n\n`;
+        if (data.detected_subject) {
+          result += `**Detected Subject:** ${data.detected_subject}\n\n`;
+        }
+        result += `${data.message || 'Explicit user confirmation that the image matches the selected modality is required for research evaluation.'}\n\n`;
+        if (data.research_disclaimer) {
+          result += `> **Research Disclaimer:** *${data.research_disclaimer}*\n`;
+        }
+        const botMsg = {
+          type: 'assistant',
+          content: result,
+          timestamp: new Date().toLocaleTimeString(),
+          source: 'Vision Service',
+        };
+        setMessages((prev) => [...prev, botMsg]);
+        await loadSessions();
+      } else if (data.status === 'modality_selection_required') {
+        let result = `## Medical Modality Selection Required\n\n`;
+        if (data.detected_subject && data.detected_subject !== 'Unrecognized Visual Subject') {
+          result += `**Detected Subject:** ${data.detected_subject}\n\n`;
+        }
+        result += `${data.message || 'Automatic medical routing is disabled to ensure safety. Please explicitly select the medical imaging modality (Skin, X-ray, or Retina) above to proceed with analysis.'}\n\n`;
+        result += `> **Safety Policy:** *Autonomous routing using visual heuristics is disabled. Medical specialist models are only invoked upon explicit modality selection.*\n`;
+        const botMsg = {
+          type: 'assistant',
+          content: result,
+          timestamp: new Date().toLocaleTimeString(),
+          source: 'Vision Service',
+        };
+        setMessages((prev) => [...prev, botMsg]);
+        await loadSessions();
+      } else if (data.status === 'recognition_unavailable') {
+        let result = `## Visual Recognition Unavailable\n\n`;
+        result += `${data.message || 'Visual recognition is currently unavailable. If this is a medical image, you can select the modality (Skin, X-ray, Retina) manually above.'}\n\n`;
+        result += `*Non-medical object classification requires an active multimodal vision API.*`;
+        const botMsg = {
+          type: 'assistant',
+          content: result,
+          timestamp: new Date().toLocaleTimeString(),
+          source: 'Vision Service',
+        };
+        setMessages((prev) => [...prev, botMsg]);
+        await loadSessions();
       } else if (data.status === 'unsupported_image') {
         let result = `## Unsupported Image\n\n`;
-        if (data.description) {
-          result += `**Observed Content:** ${data.description}\n\n`;
+        if (data.detected_subject) {
+          result += `**Detected Subject:** ${data.detected_subject}\n\n`;
         }
-        result += `*The uploaded image does not appear to be a supported medical image (skin photo, X-ray radiograph, or retinal fundus scan).\nPlease upload a supported clinical image for AI analysis.*`;
+        if (data.description) {
+          result += `**Visual Description:** ${data.description}\n\n`;
+        }
+        if (data.is_person) {
+          result += `> **General Photography Notice:** This photograph depicts an ordinary person. Ordinary photographs cannot be used for clinical medical diagnosis. No facial identification or disease inference was performed.\n\n`;
+        } else if (data.reason_not_applicable) {
+          result += `> **Medical Intake Notice:** ${data.reason_not_applicable}\n\n`;
+        } else {
+          result += `*The uploaded image does not appear to be a supported medical image (skin photo, X-ray radiograph, or retinal fundus scan).\nPlease upload a supported clinical image for AI analysis.*\n\n`;
+        }
+        if (data.vision_engine) {
+          result += `*Analysis Engine: ${data.vision_engine === 'groq_vision' ? 'Multimodal Vision AI' : 'Deterministic Visual Features'}*\n`;
+        }
         const botMsg = {
           type: 'assistant',
           content: result,
@@ -693,6 +790,9 @@ export default function App() {
         await loadSessions();
       } else if (data.status === 'inconclusive') {
         let result = `## Analysis Inconclusive\n\n`;
+        if (data.detected_subject) {
+          result += `**Observed Subject:** ${data.detected_subject}\n\n`;
+        }
         result += `${data.message || 'The image could not be reliably classified or visual features were ambiguous.'}\n\n`;
         result += `*Please upload a clearer clinical image for analysis.*`;
         const botMsg = {
@@ -730,8 +830,17 @@ export default function App() {
 
         let result = `## Medical Image Analysis\n\n`;
         result += `**Modality:** ${catLabel}\n\n`;
-        result += `### Model Finding: **${data.disease}**\n`;
+        if (data.detected_subject) {
+          result += `**Visual Subject:** ${data.detected_subject}\n\n`;
+        }
+        if (data.description) {
+          result += `**Visual Observation:** ${data.description}\n\n`;
+        }
+        result += `### Model Finding: **${data.disease}** *(Unvalidated Research Prototype Output — NOT a Confirmed Clinical Diagnosis)*\n`;
         result += `**Model Output Score:** ${scoreVal.toFixed(4)} *(uncalibrated prototype score, not a clinical probability)*\n\n`;
+        result += `> ⚠️ **CRITICAL MEDICAL DISCLAIMER — NOT A CLINICAL DIAGNOSIS**\n`;
+        result += `> This is an experimental, uncalibrated research prototype finding. Do NOT use this result for self-diagnosis, clinical decisions, or treatment planning.\n`;
+        result += `> Prototype deep learning models produce false positives and false negatives (e.g. benign lesions may receive high malignancy scores). Please consult a qualified dermatologist for an in-person evaluation. Any further investigation or biopsy should be determined by the treating clinician.\n\n`;
 
         if (data.is_negative_finding) {
           result += `> **Normal/Negative Reference**: The classifier identified features consistent with normal reference imagery. This is an algorithmic observation and does not rule out underlying medical conditions.\n\n`;

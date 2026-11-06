@@ -541,9 +541,11 @@ def test_lightweight_import_smoke_test_disease_classifier_clarification():
     """
     import subprocess
     import sys
-    # Verify in a clean process that app.core.config is lightweight and does NOT import torch
+    backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    env = {**os.environ, "PYTHONPATH": backend_dir}
     res = subprocess.run(
         [sys.executable, "-c", "import app.core.config; import sys; assert 'torch' not in sys.modules"],
         capture_output=True,
+        env=env,
     )
     assert res.returncode == 0

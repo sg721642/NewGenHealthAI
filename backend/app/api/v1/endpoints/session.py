@@ -33,15 +33,22 @@ async def get_history_endpoint(
 ):
     """
     Return the chat history for the current session.
-    Fails with 401 if unauthenticated, 404 if conversation not owned.
+    Fails with 401 if unauthenticated, 404 if explicit conversation not owned.
     """
+    explicit_session_id = req.headers.get("X-Session-ID")
     session_id = _get_session_id(req)
     messages = db_service.get_chat_history(session_id, user_id=current_user.id)
     if messages is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Conversation not found",
-        )
+        if explicit_session_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Conversation not found",
+            )
+        return {
+            "messages": [],
+            "session_id": session_id,
+            "success": True,
+        }
     return {
         "messages": messages,
         "session_id": session_id,

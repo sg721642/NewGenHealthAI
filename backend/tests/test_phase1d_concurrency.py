@@ -31,7 +31,10 @@ def temp_db(tmp_path):
     Base.metadata.create_all(bind=engine)
     TestingSession = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     db_svc = DatabaseService(session_local=TestingSession, engine_instance=engine)
-    return db_svc, engine, db_file
+    try:
+        yield db_svc, engine, db_file
+    finally:
+        engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -578,6 +581,8 @@ def test_stepwise_schema_migration_recovery(tmp_path):
         # Clean conversation from v1 is preserved
         conv_owner = conn.execute(text("SELECT user_id FROM conversations WHERE id = 's1'")).scalar()
         assert conv_owner == 1
+
+    engine.dispose()
 
 
 @pytest.mark.asyncio

@@ -189,11 +189,17 @@ def get_medical_info(
     if not disease_name or disease_name.lower().strip() in ("none", "unknown", "inconclusive"):
         return {"raw": "No specific educational literature is available for this finding."}
 
-    from app.tools.vector_store import get_retriever
-    from app.tools.llm_client import get_llm
+    try:
+        from app.tools.vector_store import get_retriever
+        retriever = get_retriever()
+    except Exception:
+        retriever = None
 
-    retriever = get_retriever()
-    llm = get_llm()
+    try:
+        from app.tools.llm_client import get_llm
+        llm = get_llm()
+    except Exception:
+        llm = None
 
     if not llm:
         return {"raw": "Educational medical information service is temporarily unavailable."}
@@ -242,7 +248,12 @@ def get_medical_info(
 
     try:
         response = llm.invoke(prompt)
-        text = response.content.strip() if hasattr(response, "content") else str(response).strip()
+        if hasattr(response, "content"):
+            raw_c = response.content
+            text = str(raw_c.strip()) if hasattr(raw_c, "strip") else str(raw_c)
+        else:
+            text = str(response).strip()
+        text = str(text)
         return {"raw": text}
     except Exception as e:
         logger.error("Error generating educational info for %s: %s", disease_name, type(e).__name__)
@@ -291,6 +302,7 @@ async def analyze_image(
     request: Request,
     file: UploadFile = File(...),
     modality: Optional[str] = Form(None),
+    modality_confirmed: Optional[str] = Form(None),
     current_user: User = Depends(get_current_user),
 ):
     """
@@ -359,31 +371,237 @@ async def analyze_image(
             )
 
         try:
-            from app.services.disease_classifier import (
-                disease_classifier,
-                detect_domain_from_visual_features,
-            )
+            from app.services.disease_classifier import disease_classifier
 
             # ── 3. Execute Disease Classification in Worker Thread ──
+            clean_modality = None
+            if modality and isinstance(modality, str):
+                m_clean = modality.strip().lower()
+                if m_clean in ("skin", "xray", "retina", "general"):
+                    clean_modality = m_clean
+
+            is_confirmed = False
+            if modality_confirmed is not None:
+                if isinstance(modality_confirmed, bool):
+                    is_confirmed = modality_confirmed
+                elif isinstance(modality_confirmed, str):
+                    is_confirmed = modality_confirmed.strip().lower() in ("true", "1", "yes")
+
             prediction = await asyncio.to_thread(
-                disease_classifier.classify, image, routed_category=modality
+                disease_classifier.classify,
+                image,
+                routed_category=clean_modality,
+                modality_confirmed=is_confirmed,
             )
             status = prediction.get("status", "inconclusive")
 
-            # Fallback domain detection using visual features if inconclusive and modality not explicitly set
-            if status == "inconclusive" and not modality:
-                vf_domain, vf_conf, vf_scores = detect_domain_from_visual_features(image)
-                if vf_domain == "non_medical":
-                    status = "unsupported_image"
-                    prediction["domain_hint"] = "non_medical"
-                    prediction["domain_confidence"] = vf_conf
-                elif vf_domain in ("skin", "xray", "retina"):
-                    prediction = await asyncio.to_thread(
-                        disease_classifier.classify, image, routed_category=vf_domain
+            # ── 4. Handle 'general_recognition' (HTTP 200) ──
+            if status == "general_recognition":
+                detected_subj = prediction.get("detected_subject", "Visible Subject")
+                detected_cat = prediction.get("detected_category", prediction.get("category", "non_medical"))
+                raw_is_person = prediction.get("is_person")
+                p_status = prediction.get(
+                    "person_detection",
+                    prediction.get(
+                        "person_detection_status",
+                        "unsupported" if raw_is_person is not True else "detected_portrait"
                     )
-                    status = prediction.get("status", "inconclusive")
+                )
+                is_person = True if raw_is_person is True else None if p_status == "unsupported" or raw_is_person is None else False
+                reason_not_applicable = prediction.get(
+                    "reason_not_applicable",
+                    "Everyday non-medical images are not applicable for medical diagnostic analysis."
+                )
+                safety_disclaimer = prediction.get("safety_disclaimer")
+                desc = (
+                    prediction.get("description")
+                    or f"Visual recognition complete: {detected_subj}."
+                )
+                top1_class = prediction.get("top1_class") or prediction.get("top1_name")
+                top1_prob = prediction.get("top1_prob")
+                raw_score = prediction.get("raw_score") if prediction.get("raw_score") is not None else top1_prob
+                predictions_list = prediction.get("predictions", [])
 
-            # ── 4. Handle 'model_unavailable' (HTTP 503) ──
+                persisted_text = (
+                    f"## Universal Image Recognition\n\n"
+                    f"**Detected Subject:** {detected_subj}\n\n"
+                    f"**Visual Description:** {desc}\n\n"
+                    f"> **Medical Analysis:** Not applicable.\n"
+                    f"> *{reason_not_applicable}*\n"
+                )
+                if safety_disclaimer:
+                    persisted_text += f"\n*Safety Policy: {safety_disclaimer}*\n"
+                _persist_assistant_msg(persisted_text)
+
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "status": "general_recognition",
+                        "success": True,
+                        "type": "general_image",
+                        "category": detected_cat,
+                        "detected_category": detected_cat,
+                        "detected_subject": detected_subj,
+                        "description": desc,
+                        "top1_class": top1_class,
+                        "top1_name": top1_class,
+                        "top1_prob": round(top1_prob, 4) if top1_prob is not None else None,
+                        "raw_score": round(raw_score, 4) if raw_score is not None else None,
+                        "score": round(raw_score, 4) if raw_score is not None else 0.0,
+                        "predictions": predictions_list,
+                        "is_person": is_person,
+                        "person_detection": p_status,
+                        "person_detection_status": p_status,
+                        "person_detection_note": prediction.get(
+                            "person_detection_note",
+                            "Person presence could not be reliably determined. Closed-set object classifier does not support general person detection; does not confirm absence of human."
+                        ),
+                        "medical_applicable": False,
+                        "reason_not_applicable": reason_not_applicable,
+                        "safety_disclaimer": safety_disclaimer,
+                        "vision_engine": prediction.get("vision_engine", "local_neural_vision"),
+                        "vision_model": prediction.get("vision_model"),
+                        "domain_hint": prediction.get("domain_hint", "non_medical"),
+                        "domain_confidence": prediction.get("domain_confidence", 0.95),
+                        "routing_decision": "NO AUTOMATIC MEDICAL ROUTE",
+                    },
+                )
+
+            # ── 4b. Handle 'modality_selection_required' (HTTP 200) ──
+            if status == "modality_selection_required":
+                msg_text = prediction.get(
+                    "message",
+                    "Automatic clinical routing is disabled to ensure patient safety. "
+                    "If this is a medical image, please explicitly select the modality (Skin, X-ray, Retina) to proceed.",
+                )
+                detected_subj = prediction.get("detected_subject", "Unrecognized Visual Subject")
+                persisted_text = (
+                    f"## Medical Modality Selection Required\n\n"
+                    f"**Detected Subject:** {detected_subj}\n\n"
+                    f"{msg_text}\n\n"
+                    f"> **Safety Notice:** *Autonomous routing using visual heuristics is disabled. "
+                    f"Specialist models are only invoked upon explicit modality selection.*"
+                )
+                _persist_assistant_msg(persisted_text)
+
+                top1_class = prediction.get("top1_class") or prediction.get("top1_name")
+                top1_prob = prediction.get("top1_prob")
+                raw_score = prediction.get("raw_score") if prediction.get("raw_score") is not None else top1_prob
+
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "status": "modality_selection_required",
+                        "success": False,
+                        "type": "medical_selection_required",
+                        "routing_decision": "NO AUTOMATIC MEDICAL ROUTE",
+                        "message": msg_text,
+                        "category": prediction.get("category", "ambiguous"),
+                        "detected_category": prediction.get("detected_category", "ambiguous"),
+                        "detected_subject": detected_subj,
+                        "description": prediction.get("description"),
+                        "top1_class": top1_class,
+                        "top1_name": top1_class,
+                        "top1_prob": round(top1_prob, 4) if top1_prob is not None else None,
+                        "raw_score": round(raw_score, 4) if raw_score is not None else None,
+                        "predictions": prediction.get("predictions", []),
+                        "medical_applicable": False,
+                        "modality_source": "auto_intake_abstention",
+                        "vision_engine": prediction.get("vision_engine", "local_neural_vision"),
+                        "domain_hint": prediction.get("domain_hint", "ambiguous"),
+                        "domain_confidence": prediction.get("domain_confidence", 0.0),
+                    },
+                )
+
+            # ── 4c. Handle 'clinical_analysis_disabled' (HTTP 200) ──
+            if status == "clinical_analysis_disabled":
+                msg_text = prediction.get(
+                    "message",
+                    "Clinical specialist analysis is disabled in this release pending formal clinical validation "
+                    "and regulatory review. General image recognition remains available."
+                )
+                persisted_text = (
+                    f"## Clinical Specialist Analysis Unavailable\n\n"
+                    f"{msg_text}\n\n"
+                    f"> **Governance Notice:** *This system is NOT clinically validated. "
+                    f"Diagnostic specialist models are disabled by default in production.*"
+                )
+                _persist_assistant_msg(persisted_text)
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "status": "clinical_analysis_disabled",
+                        "success": False,
+                        "type": "clinical_disabled",
+                        "message": msg_text,
+                        "category": prediction.get("category"),
+                        "clinical_governance_status": "NOT_CLINICALLY_VALIDATED",
+                        "medical_applicable": False,
+                        "safety_notice": "Unvalidated diagnostic specialist models are disabled by default in production.",
+                    },
+                )
+
+            # ── 4d. Handle 'modality_confirmation_required' (HTTP 200) ──
+            if status == "modality_confirmation_required":
+                msg_text = prediction.get(
+                    "message",
+                    "Explicit confirmation required: Please confirm that the uploaded image matches the selected modality for research evaluation."
+                )
+                disclaimer = prediction.get(
+                    "research_disclaimer",
+                    "RESEARCH ONLY — NOT FOR CLINICAL USE: This prototype model has not undergone clinical validation."
+                )
+                detected_subj = prediction.get("detected_subject", "Medical Specimen")
+                persisted_text = (
+                    f"## Research Modality Confirmation Required\n\n"
+                    f"**Selected Modality:** {prediction.get('category', clean_modality)}\n\n"
+                    f"{msg_text}\n\n"
+                    f"> **Research Disclaimer:** *{disclaimer}*"
+                )
+                _persist_assistant_msg(persisted_text)
+
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "status": "modality_confirmation_required",
+                        "success": False,
+                        "type": "confirmation_required",
+                        "message": msg_text,
+                        "category": prediction.get("category", clean_modality),
+                        "requires_confirmation": True,
+                        "research_disclaimer": disclaimer,
+                        "detected_subject": detected_subj,
+                        "description": prediction.get("description"),
+                        "medical_applicable": False,
+                        "is_person": None,
+                        "person_detection": "unsupported",
+                        "person_detection_status": "unsupported",
+                        "modality_source": "user_selected_unconfirmed",
+                    },
+                )
+
+            # ── 5. Handle 'recognition_unavailable' (HTTP 200) ──
+            if status == "recognition_unavailable":
+                msg_text = prediction.get(
+                    "message",
+                    "Visual recognition service is currently unavailable. Specialist medical models (Skin, X-ray, Retina) can still be selected manually."
+                )
+                _persist_assistant_msg(f"## Visual Recognition Unavailable\n\n{msg_text}")
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "status": "recognition_unavailable",
+                        "success": False,
+                        "message": msg_text,
+                        "category": "unknown",
+                        "detected_subject": "Visual Recognition Unavailable",
+                        "description": "Visual recognition service is currently unavailable offline.",
+                        "medical_applicable": False,
+                        "vision_engine": prediction.get("vision_engine", "heuristic_fallback"),
+                    },
+                )
+
+            # ── 6. Handle 'model_unavailable' (HTTP 503) ──
             if status == "model_unavailable":
                 msg_text = prediction.get(
                     "message",
@@ -401,7 +619,7 @@ async def analyze_image(
                     },
                 )
 
-            # ── 5. Handle 'unsupported_image' (HTTP 422) ──
+            # ── 7. Handle 'unsupported_image' (HTTP 422) ──
             if status == "unsupported_image":
                 logger.info(
                     "Non-medical image detected (domain=%s, conf=%.3f)",
@@ -418,8 +636,35 @@ async def analyze_image(
                 except Exception as blip_err:
                     logger.warning("BLIP captioning unavailable: %s", type(blip_err).__name__)
 
-                unsupported_desc = caption or "The uploaded image does not appear to be a supported medical image."
-                _persist_assistant_msg(f"Unsupported Image: {unsupported_desc}")
+                detected_subj = prediction.get("detected_subject", "Visible Subject")
+                detected_cat = prediction.get("detected_category", "non_medical")
+                raw_is_person = prediction.get("is_person")
+                p_status = prediction.get(
+                    "person_detection",
+                    prediction.get("person_detection_status", "unsupported")
+                )
+                is_person = True if raw_is_person is True else None if p_status == "unsupported" or raw_is_person is None else False
+                reason_not_applicable = prediction.get(
+                    "reason_not_applicable",
+                    "Medical analysis is not applicable to this image."
+                )
+
+                unsupported_desc = (
+                    caption
+                    or prediction.get("description")
+                    or prediction.get("message")
+                    or "The uploaded image does not appear to be a supported medical image."
+                )
+
+                persisted_text = (
+                    f"## Image Understanding\n\n"
+                    f"**Detected Subject:** {detected_subj}\n\n"
+                    f"**Visual Description:** {unsupported_desc}\n\n"
+                    f"> **Medical Analysis:** Not applicable.\n"
+                    f"> *{reason_not_applicable}*"
+                )
+                _persist_assistant_msg(persisted_text)
+
                 return JSONResponse(
                     status_code=422,
                     content={
@@ -427,7 +672,18 @@ async def analyze_image(
                         "success": False,
                         "type": "general_image",
                         "category": "non_medical",
+                        "detected_category": detected_cat,
+                        "detected_subject": detected_subj,
                         "description": unsupported_desc,
+                        "is_person": is_person,
+                        "person_detection": p_status,
+                        "person_detection_status": p_status,
+                        "medical_applicable": False,
+                        "reason_not_applicable": reason_not_applicable,
+                        "safety_disclaimer": prediction.get("safety_disclaimer"),
+                        "override_rejected": prediction.get("override_rejected", False),
+                        "override_rejection_reason": prediction.get("override_rejection_reason"),
+                        "vision_engine": prediction.get("vision_engine", "vision_service"),
                         "domain_hint": prediction.get("domain_hint", "non_medical"),
                         "domain_confidence": prediction.get("domain_confidence", 0.0),
                     },
@@ -445,8 +701,12 @@ async def analyze_image(
                             "Image analysis was inconclusive or visual features could not be reliably classified.",
                         ),
                         "category": prediction.get("category"),
+                        "detected_subject": prediction.get("detected_subject"),
+                        "description": prediction.get("description"),
+                        "medical_applicable": False,
                         "domain_hint": prediction.get("domain_hint"),
                         "domain_confidence": prediction.get("domain_confidence", 0.0),
+                        "vision_engine": prediction.get("vision_engine", "vision_service"),
                     },
                 )
 
@@ -474,6 +734,8 @@ async def analyze_image(
                     "Anatomical classification does NOT establish that no fracture or abnormality exists. "
                     "Formal clinical radiographic evaluation by a qualified physician or radiologist is required."
                 )
+            if medical_details is not None and not isinstance(medical_details, str):
+                medical_details = str(medical_details)
 
             response_body = {
                 "status": "analysis_complete",
@@ -484,12 +746,27 @@ async def analyze_image(
                 "finding_type": finding_type,
                 "is_negative_finding": is_negative,
                 "anatomical_region": prediction.get("anatomical_region"),
+                "detected_subject": prediction.get("detected_subject"),
+                "description": prediction.get("description"),
+                "vision_engine": prediction.get("vision_engine", "vision_service"),
+                "is_person": None,
+                "person_detection": "unsupported",
+                "person_detection_status": "unsupported",
+                "modality_confirmed": prediction.get("modality_confirmed", True),
+                "research_disclaimer": prediction.get("research_disclaimer"),
+                "medical_applicable": True,
                 "score": round(score, 4),
                 "confidence": round(score, 4),  # Deprecated alias
                 "calibrated_confidence": None,
                 "score_interpretation": prediction.get(
                     "score_interpretation",
-                    "Unvalidated prototype model score; not a calibrated clinical probability.",
+                    "Unvalidated prototype model score; not a calibrated clinical probability. Do NOT use for medical diagnosis or treatment.",
+                ),
+                "clinical_warning": (
+                    "CRITICAL MEDICAL DISCLAIMER: This is an unvalidated research prototype finding. "
+                    "Do NOT use this result for self-diagnosis, clinical decisions, or treatment planning. "
+                    "Please consult a qualified dermatologist for an in-person evaluation. "
+                    "Any further investigation or biopsy should be determined by the treating clinician."
                 ),
                 "predictions": prediction.get("predictions", []),
                 "medical_details": medical_details,
@@ -501,7 +778,7 @@ async def analyze_image(
             return JSONResponse(status_code=200, content=response_body)
 
         except Exception as e:
-            logger.error("Image analysis unexpected failure: %s", type(e).__name__)
+            logger.error("Image analysis unexpected failure: %s: %s", type(e).__name__, str(e), exc_info=True)
             return JSONResponse(
                 status_code=500,
                 content={

@@ -156,12 +156,25 @@ if os.path.exists(static_dir):
         if full_path.startswith("api/") or full_path.startswith("image/"):
             from fastapi import HTTPException
             raise HTTPException(status_code=404, detail="Not Found")
-        
+
+        # Directly serve static assets located in static_dir (e.g. favicon.svg, vite.svg)
+        target_asset = os.path.join(static_dir, full_path)
+        if full_path and os.path.isfile(target_asset):
+            return FileResponse(target_asset)
+
+        # Fallback for browser /favicon.ico request: serve existing favicon.svg
+        if full_path == "favicon.ico":
+            svg_path = os.path.join(static_dir, "favicon.svg")
+            if os.path.isfile(svg_path):
+                return FileResponse(svg_path, media_type="image/svg+xml")
+            from fastapi import Response
+            return Response(status_code=204)
+
         # Otherwise, serve the React index.html for client-side routing
         index_path = os.path.join(static_dir, "index.html")
         if os.path.exists(index_path):
             return FileResponse(index_path)
-        
+
         return {"detail": "Frontend not found. Please build the frontend first."}
 else:
     logger.warning("Static directory not found at %s. Frontend will not be served.", static_dir)

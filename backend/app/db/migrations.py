@@ -45,10 +45,13 @@ def backup_database(db_path: str, backup_dir: Optional[str] = None) -> Optional[
             src_conn.close()
 
         # Verify backup integrity
-        with sqlite3.connect(backup_path) as verify_conn:
+        verify_conn = sqlite3.connect(backup_path)
+        try:
             res = verify_conn.execute("PRAGMA integrity_check").fetchone()
             if not res or str(res[0]).strip().lower() != "ok":
                 raise RuntimeError(f"Integrity check failed for backup {backup_path}: {res}")
+        finally:
+            verify_conn.close()
 
         logger.info("Database online backup verified and stored at: %s", backup_path)
         return backup_path
@@ -74,11 +77,14 @@ def restore_database(backup_path: str, target_db_path: str) -> bool:
 
     try:
         # Verify source backup integrity before restore
-        with sqlite3.connect(backup_path) as verify_conn:
+        verify_conn = sqlite3.connect(backup_path)
+        try:
             res = verify_conn.execute("PRAGMA integrity_check").fetchone()
             if not res or str(res[0]).strip().lower() != "ok":
                 logger.error("Restore aborted: backup file %s failed integrity check: %s", backup_path, res)
                 return False
+        finally:
+            verify_conn.close()
 
         # Online restore
         src_conn = sqlite3.connect(backup_path)

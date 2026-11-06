@@ -491,7 +491,7 @@ pip install -r backend/requirements.txt
 
 3. **Integrated Container Mode (Production-Style Root Dockerfile)**:
    > [!IMPORTANT]
-   > The root [`Dockerfile`](file:///Users/satyamgupta/Documents/NewGenHealthAI/Dockerfile) is the authoritative production-style container definition for local container testing and Hugging Face Spaces. It compiles the standalone frontend in Stage 1 and serves it alongside the FastAPI backend in Stage 2 under non-root UID 1000 on port 7860.
+   > The root [`Dockerfile`](../Dockerfile) is the authoritative production-style container definition for local container testing and Hugging Face Spaces. It compiles the standalone frontend in Stage 1 and serves it alongside the FastAPI backend in Stage 2 under non-root UID 1000 on port 7860.
    ```bash
    docker run -p 7860:7860 \
      -e SESSION_SECRET_KEY="presentation_demo_secret_key_minimum_32_characters" \

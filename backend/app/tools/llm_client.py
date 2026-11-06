@@ -3,9 +3,10 @@ NewGenHealthAI — tools/llm_client.py
 Groq LLM client singleton with multi-model fallback resilience.
 """
 
+import os
 import time
 from typing import Any, Dict, List, Optional
-from app.core.config import GROQ_API_KEY, GROQ_CHAT_MODEL, GROQ_FALLBACK_MODELS
+from app.core.config import GROQ_API_KEY, GROQ_CHAT_MODEL, GROQ_FALLBACK_MODELS, OFFLINE_MODE, is_offline_mode
 from app.core.logging_config import logger
 
 _cached_llms = {}
@@ -28,6 +29,10 @@ def get_llm(
     max_tokens: int = 2048,
 ):
     """Return a cached ChatGroq LLM instance for the specified or default model."""
+    if is_offline_mode():
+        logger.info("get_llm: OFFLINE_MODE is active; skipping LLM client initialization")
+        return None
+
     if not GROQ_API_KEY:
         logger.warning("GROQ_API_KEY not found in environment variables")
         return None
@@ -65,6 +70,10 @@ def invoke_llm_with_fallback(
     Invoke Groq LLM across candidate models in priority order.
     Catches NotFoundError / model deprecation errors and attempts the next candidate model.
     """
+    if is_offline_mode():
+        logger.info("invoke_llm_with_fallback: OFFLINE_MODE is active; skipping external LLM invocation")
+        return None
+
     if not GROQ_API_KEY:
         logger.warning("invoke_llm_with_fallback: GROQ_API_KEY missing")
         return None

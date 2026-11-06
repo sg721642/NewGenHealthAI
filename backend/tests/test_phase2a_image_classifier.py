@@ -248,7 +248,7 @@ def test_scenarios_06_to_09_hard_modality_lock_missing_model(dummy_image, modali
     classifier.models = {}  # No models loaded
 
     with patch("app.services.disease_classifier.detect_visual_domain", return_value=(modality, 0.85, {modality: 0.85})):
-        result = classifier.classify(dummy_image)
+        result = classifier.classify(dummy_image, routed_category=modality, modality_confirmed=True)
 
     assert result["status"] == "model_unavailable"
     assert result["category"] == modality
@@ -266,7 +266,7 @@ def test_scenario_10_all_models_missing(dummy_image):
     classifier.models = {}
 
     with patch("app.services.disease_classifier.detect_visual_domain", return_value=("xray", 0.90, {"xray": 0.90})):
-        result = classifier.classify(dummy_image)
+        result = classifier.classify(dummy_image, routed_category="xray", modality_confirmed=True)
 
     assert result["status"] == "model_unavailable"
     assert result["category"] == "xray"
@@ -349,7 +349,7 @@ def test_scenario_14_inference_exception_handled_inconclusive(dummy_image):
     classifier.models["skin"] = mock_model
 
     with patch("app.services.disease_classifier.detect_visual_domain", return_value=("skin", 0.85, {"skin": 0.85})):
-        result = classifier.classify(dummy_image)
+        result = classifier.classify(dummy_image, routed_category="skin", modality_confirmed=True)
 
     assert result["status"] == "inconclusive"
     assert "error occurred during skin model inference" in result["message"]
@@ -390,7 +390,7 @@ def test_scenario_17_score_interpretation_and_no_calibrated_confidence(dummy_ima
     classifier.models["skin"] = mock_model
 
     with patch("app.services.disease_classifier.detect_visual_domain", return_value=("skin", 0.90, {"skin": 0.90})):
-        result = classifier.classify(dummy_image)
+        result = classifier.classify(dummy_image, routed_category="skin", modality_confirmed=True)
 
     assert result["status"] == "analysis_complete"
     assert result["score"] == 0.8234

@@ -340,6 +340,74 @@ describe('App Integration', () => {
         });
     });
 
+    it('renders general_recognition status cleanly as a universal understanding card without error banner', async () => {
+        mockFetch.mockImplementation((url) => {
+            if (url === '/api/v1/analyze-image') {
+                return Promise.resolve({
+                    json: () => Promise.resolve({
+                        status: 'general_recognition',
+                        success: true,
+                        category: 'animal',
+                        detected_subject: 'Golden Retriever Dog',
+                        description: 'A golden retriever dog sitting on a lawn.',
+                        is_person: false,
+                        medical_applicable: false,
+                        reason_not_applicable: 'This image depicts an animal. Veterinary images are outside the scope of human medical intake.',
+                        safety_disclaimer: 'Veterinary images are outside the scope of human medical intake.',
+                        vision_engine: 'groq_vision',
+                    }),
+                    status: 200,
+                    ok: true,
+                });
+            }
+            return Promise.resolve({ json: () => Promise.resolve({ success: true, sessions: [] }), ok: true });
+        });
+
+        render(<App />);
+
+        const fileInput = document.querySelector('input[type="file"]');
+        const file = new File(['fake-content'], 'golden_retriever.png', { type: 'image/png' });
+        fireEvent.change(fileInput, { target: { files: [file] } });
+
+        await waitFor(() => {
+            expect(screen.getByText(/Universal Image Recognition/)).toBeInTheDocument();
+            expect(screen.getByText(/Golden Retriever Dog/)).toBeInTheDocument();
+            expect(screen.getByText(/A golden retriever dog sitting on a lawn/)).toBeInTheDocument();
+            expect(screen.queryByText(/Error/i)).toBeNull();
+            expect(screen.queryByText(/Unsupported Image/i)).toBeNull();
+        });
+    });
+
+    it('renders recognition_unavailable status cleanly with notice about offline state and manual selection', async () => {
+        mockFetch.mockImplementation((url) => {
+            if (url === '/api/v1/analyze-image') {
+                return Promise.resolve({
+                    json: () => Promise.resolve({
+                        status: 'recognition_unavailable',
+                        success: false,
+                        message: 'Visual recognition service is currently unavailable. Specialist medical models (Skin, X-ray, Retina) can still be selected manually.',
+                        category: 'unknown',
+                        vision_engine: 'heuristic_fallback',
+                    }),
+                    status: 200,
+                    ok: true,
+                });
+            }
+            return Promise.resolve({ json: () => Promise.resolve({ success: true, sessions: [] }), ok: true });
+        });
+
+        render(<App />);
+
+        const fileInput = document.querySelector('input[type="file"]');
+        const file = new File(['fake-content'], 'photo.png', { type: 'image/png' });
+        fireEvent.change(fileInput, { target: { files: [file] } });
+
+        await waitFor(() => {
+            expect(screen.getByText(/Visual Recognition Unavailable/)).toBeInTheDocument();
+            expect(screen.getByText(/Specialist medical models \(Skin, X-ray, Retina\) can still be selected manually/)).toBeInTheDocument();
+        });
+    });
+
     it('handles microphone permission denial gracefully', async () => {
         const originalAlert = window.alert;
         const mockAlert = vi.fn();
@@ -797,5 +865,149 @@ describe('App Integration', () => {
         expect(sessionBtn).not.toBeNull();
         expect(sessionBtn.querySelector('button')).toBeNull();
         expect(sessionBtn.closest('.history-session-item').tagName.toLowerCase()).not.toBe('button');
+    });
+
+    it('renders general_recognition with top1 class and raw score without claiming medical analysis', async () => {
+        mockFetch.mockImplementation((url) => {
+            if (url === '/api/v1/analyze-image') {
+                return Promise.resolve({
+                    json: () => Promise.resolve({
+                        status: 'general_recognition',
+                        success: true,
+                        type: 'general_image',
+                        category: 'animal',
+                        detected_category: 'animal',
+                        detected_subject: 'Animal (Curly-Coated Retriever)',
+                        description: 'Visual recognition identified a non-medical animal (curly-coated retriever).',
+                        top1_class: 'curly-coated retriever',
+                        top1_name: 'curly-coated retriever',
+                        top1_prob: 0.8212,
+                        raw_score: 0.8212,
+                        score: 0.8212,
+                        is_person: false,
+                        medical_applicable: false,
+                        reason_not_applicable: 'This image depicts an animal. Veterinary images are outside the scope of human medical intake.',
+                        safety_disclaimer: 'Veterinary images are outside the scope of human medical intake.',
+                        vision_engine: 'local_neural_vision',
+                        routing_decision: 'NO AUTOMATIC MEDICAL ROUTE',
+                    }),
+                    ok: true,
+                });
+            }
+            return Promise.resolve({ json: () => Promise.resolve({ success: true, sessions: [] }), ok: true });
+        });
+
+        render(<App />);
+        const fileInput = document.querySelector('input[type="file"]');
+        const file = new File(['dog-img'], 'dog.jpg', { type: 'image/jpeg' });
+        fireEvent.change(fileInput, { target: { files: [file] } });
+
+        await waitFor(() => {
+            expect(screen.getByText(/Universal Image Recognition/)).toBeInTheDocument();
+            expect(screen.getByText(/Curly-Coated Retriever/)).toBeInTheDocument();
+            expect(screen.getByText(/0\.8212/)).toBeInTheDocument();
+            expect(screen.getByText(/Medical Analysis:/)).toBeInTheDocument();
+            expect(screen.queryByText(/Model Finding:/)).toBeNull();
+        });
+    });
+
+    it('renders modality_selection_required guidance when automatic intake abstains from clinical routing', async () => {
+        mockFetch.mockImplementation((url) => {
+            if (url === '/api/v1/analyze-image') {
+                return Promise.resolve({
+                    json: () => Promise.resolve({
+                        status: 'modality_selection_required',
+                        success: false,
+                        routing_decision: 'NO AUTOMATIC MEDICAL ROUTE',
+                        message: 'Automatic clinical routing is disabled to ensure patient safety. If this is a medical image, please explicitly select the modality (Skin, X-ray, Retina) to proceed.',
+                        category: 'ambiguous',
+                        detected_subject: 'Unrecognized Visual Subject',
+                        medical_applicable: false,
+                    }),
+                    ok: true,
+                });
+            }
+            return Promise.resolve({ json: () => Promise.resolve({ success: true, sessions: [] }), ok: true });
+        });
+
+        render(<App />);
+        const fileInput = document.querySelector('input[type="file"]');
+        const file = new File(['clinical-img'], 'skin.jpg', { type: 'image/jpeg' });
+        fireEvent.change(fileInput, { target: { files: [file] } });
+
+        await waitFor(() => {
+            expect(screen.getByText(/Medical Modality Selection Required/)).toBeInTheDocument();
+            expect(screen.getByText(/explicitly select the modality/i)).toBeInTheDocument();
+            expect(screen.getByText(/Autonomous routing using visual heuristics is disabled/i)).toBeInTheDocument();
+        });
+    });
+
+    it('renders Person detection: Unsupported / Unknown when is_person is null', async () => {
+        mockFetch.mockImplementation((url) => {
+            if (url === '/api/v1/analyze-image') {
+                return Promise.resolve({
+                    json: () => Promise.resolve({
+                        status: 'general_recognition',
+                        success: true,
+                        category: 'object',
+                        detected_subject: 'Everyday Object (Suit)',
+                        description: 'Visual recognition identified a non-medical object (suit).',
+                        top1_class: 'suit',
+                        top1_prob: 0.4459,
+                        raw_score: 0.4459,
+                        is_person: null,
+                        person_detection_status: 'unsupported',
+                        person_detection_note: 'Person presence could not be reliably determined. Closed-set ImageNet-1K does not support general person detection.',
+                        medical_applicable: false,
+                        routing_decision: 'NO AUTOMATIC MEDICAL ROUTE',
+                    }),
+                    ok: true,
+                });
+            }
+            return Promise.resolve({ json: () => Promise.resolve({ success: true, sessions: [] }), ok: true });
+        });
+
+        render(<App />);
+        const fileInput = document.querySelector('input[type="file"]');
+        const file = new File(['portrait-img'], 'portrait.jpg', { type: 'image/jpeg' });
+        fireEvent.change(fileInput, { target: { files: [file] } });
+
+        await waitFor(() => {
+            expect(screen.getByText(/Person detection: Unsupported \/ Unknown/i)).toBeInTheDocument();
+            expect(screen.queryByText(/No person detected/i)).toBeNull();
+        });
+    });
+
+    it('renders non-mandating biopsy disclaimer in medical analysis card', async () => {
+        mockFetch.mockImplementation((url) => {
+            if (url === '/api/v1/analyze-image') {
+                return Promise.resolve({
+                    json: () => Promise.resolve({
+                        status: 'analysis_complete',
+                        success: true,
+                        category: 'skin',
+                        disease: 'Melanoma',
+                        finding_type: 'condition_detected',
+                        score: 0.7140,
+                        confidence: 0.7140,
+                        clinical_warning: 'CRITICAL MEDICAL DISCLAIMER: Unvalidated prototype.',
+                        predictions: [{ disease: 'Melanoma', score: 0.7140 }],
+                    }),
+                    ok: true,
+                });
+            }
+            return Promise.resolve({ json: () => Promise.resolve({ success: true, sessions: [] }), ok: true });
+        });
+
+        render(<App />);
+        const fileInput = document.querySelector('input[type="file"]');
+        const file = new File(['skin-img'], 'skin.jpg', { type: 'image/jpeg' });
+        fireEvent.change(fileInput, { target: { files: [file] } });
+
+        await waitFor(() => {
+            expect(screen.getByText(/CRITICAL MEDICAL DISCLAIMER — NOT A CLINICAL DIAGNOSIS/i)).toBeInTheDocument();
+            expect(screen.getByText(/Any further investigation or biopsy should be determined by the treating clinician/i)).toBeInTheDocument();
+            expect(screen.queryByText(/Formal clinical examination and dermatoscopic biopsy by a licensed healthcare provider are required/i)).toBeNull();
+        });
     });
 });

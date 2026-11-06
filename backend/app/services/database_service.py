@@ -449,6 +449,25 @@ class DatabaseService:
             session.commit()
             return res.rowcount > 0
 
+    def revoke_sessions_for_user(self, username: str) -> int:
+        """
+        Narrowly scoped revocation mechanism: revokes all active auth sessions
+        belonging strictly to the specified username.
+        Preserves all unrelated user sessions and conversations.
+        Returns the number of revoked session records.
+        """
+        if not username or not username.strip():
+            return 0
+        user = self.get_user_by_username(username.strip())
+        if not user:
+            return 0
+        with self.get_session() as session:
+            res = session.execute(
+                delete(UserSession).where(UserSession.user_id == user.id)
+            )
+            session.commit()
+            return res.rowcount
+
     def cleanup_expired_sessions(self) -> int:
         """Purge all expired session rows."""
         now = datetime.now(timezone.utc)

@@ -4,7 +4,7 @@
 
 | Field | Value |
 |---|---|
-| Absolute path | `/Users/satyamgupta/Documents/NewGenHealthAI` |
+| Workspace root | `<repo_root>` |
 | Repository | `https://github.com/sg721642/NewGenHealthAI` |
 | Branch | `fix/healthai-audit-premium-ui` |
 | Baseline commit (audited) | `1605ec87683e735857ad3c0353fa0ce8feceffbe` |

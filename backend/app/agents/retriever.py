@@ -30,9 +30,10 @@ def RetrieverAgent(state: AgentState) -> AgentState:
 
     retriever = get_retriever()
     if not retriever:
-        logger.warning("RAG: No retriever available — vector store not initialized")
+        logger.warning("RAG: No retriever available — vector store not initialized or dependencies missing")
         state["documents"] = []
         state["rag_success"] = False
+        state["rag_status"] = "unavailable"
         return state
 
     try:
@@ -56,11 +57,13 @@ def RetrieverAgent(state: AgentState) -> AgentState:
         if valid_docs:
             state["documents"] = valid_docs
             state["rag_success"] = True
+            state["rag_status"] = "success"
             state["source"] = "Medical Literature Database"
             logger.info("RAG: Found %d relevant documents", len(valid_docs))
         else:
             state["documents"] = []
             state["rag_success"] = False
+            state["rag_status"] = "no_documents_found"
             logger.info("RAG: No valid documents found")
 
     except Exception as e:

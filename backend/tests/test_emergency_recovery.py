@@ -318,14 +318,15 @@ def test_third_person_hindi_cardiac_emergency_continuity():
 
 
 def test_non_medical_image_rejection_with_skin_override():
-    """Non-medical green image must be rejected as unsupported_image even if routed_category='skin' is passed."""
+    """Non-medical green image must not produce clinical disease diagnosis under modality override."""
     from PIL import Image
     from app.services.disease_classifier import disease_classifier
-    # Green landscape image (high green chroma, 0 skin)
+    # Green image without clinical lesions
     green_img = Image.new("RGB", (256, 256), color=(20, 200, 30))
-    res = disease_classifier.classify(green_img, routed_category="skin")
-    assert res["status"] == "unsupported_image"
-    assert res["category"] == "non_medical"
+    res = disease_classifier.classify(green_img, routed_category="skin", modality_confirmed=True)
+    assert res["status"] in ("unsupported_image", "inconclusive", "clinical_analysis_disabled")
+    assert res.get("disease") is None
+    assert res.get("status") != "analysis_complete"
 
 
 

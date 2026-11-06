@@ -352,6 +352,7 @@ def test_model_weights_missing_returns_503_model_unavailable(client, mock_user):
                 disease_classifier.models.pop("skin", None)
                 response = client.post(
                     "/api/v1/analyze-image",
+                    data={"modality": "skin", "modality_confirmed": "true"},
                     files={"file": ("skin.jpg", jpeg_data, "image/jpeg")},
                 )
                 assert response.status_code == 503
