@@ -517,7 +517,7 @@ export default function App() {
         }
       },
     });
-  }, [sessions, authHeaders, loadSessions, createNewChat, revokeAllObjectURLs, showToast]);
+  }, [sessions, authHeaders, revokeAllObjectURLs, showToast]);
 
   // Clear current conversation
   const clearChat = useCallback(() => {
