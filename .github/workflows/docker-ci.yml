@@ -6,11 +6,13 @@ on:
       - main
       - fix/healthai-audit-premium-ui
       - fix/production-bootstrap-hardening
+      - fix/track-pdfs-in-git-lfs
   pull_request:
     branches:
       - main
       - fix/healthai-audit-premium-ui
       - fix/production-bootstrap-hardening
+      - fix/track-pdfs-in-git-lfs
   workflow_dispatch:
 
 jobs:
