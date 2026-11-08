@@ -40,7 +40,7 @@ jobs:
 
       - name: Prepare Frontend Static Assets for Backend Serving Tests
         run: |
-          mkdir -p backend/app/static
+          mkdir -p backend/app/static/assets
           if [ -f frontend/public/favicon.svg ]; then
             cp frontend/public/favicon.svg backend/app/static/favicon.svg
           fi
