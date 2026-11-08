@@ -10,7 +10,10 @@ import hmac
 from typing import Dict, NamedTuple, Optional, Tuple
 
 from argon2 import PasswordHasher
-from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
+try:
+    from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
+except ImportError:
+    from argon2.exceptions import InvalidHash as InvalidHashError, VerificationError, VerifyMismatchError
 from sqlalchemy import Column, DateTime, Integer, String, Text
 from sqlalchemy.orm import declarative_base
 

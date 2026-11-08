@@ -85,6 +85,14 @@ def test_client():
 
 
 @pytest.fixture(autouse=True)
+def clean_fastapi_dependency_overrides():
+    """Ensure FastAPI dependency overrides do not leak across test cases."""
+    app.dependency_overrides.clear()
+    yield
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture(autouse=True)
 def mock_dependencies():
     """Mock all external dependencies using object-based patching to avoid CI import issues"""
     # 1. Create a workspace for all mocks

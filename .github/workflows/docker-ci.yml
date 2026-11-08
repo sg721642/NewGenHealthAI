@@ -23,6 +23,8 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v7
+        with:
+          lfs: true
 
       - name: Setup Python 3.12
         uses: actions/setup-python@v7
@@ -35,6 +37,19 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r backend/requirements.txt
+
+      - name: Prepare Frontend Static Assets for Backend Serving Tests
+        run: |
+          mkdir -p backend/app/static
+          if [ -f frontend/public/favicon.svg ]; then
+            cp frontend/public/favicon.svg backend/app/static/favicon.svg
+          fi
+          if [ -f frontend/public/vite.svg ]; then
+            cp frontend/public/vite.svg backend/app/static/vite.svg
+          fi
+          if [ -f frontend/index.html ]; then
+            cp frontend/index.html backend/app/static/index.html
+          fi
 
       - name: Run Backend Pytest Suite
         env:
@@ -91,6 +106,8 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v7
+        with:
+          lfs: true
 
       - name: Setup Node.js 20
         uses: actions/setup-node@v7
