@@ -6,7 +6,7 @@
 |---|---|
 | Workspace root | `<repo_root>` |
 | Repository | `https://github.com/sg721642/NewGenHealthAI` |
-| Branch | `fix/healthai-audit-premium-ui` |
+| Branch | `ci/add-backend-frontend-test-jobs` (PR #4) |
 | Baseline commit (audited) | `1605ec87683e735857ad3c0353fa0ce8feceffbe` |
 | Phase 0 commit | `6225e392d47da15ee6c17537651a1d95ec986c75` |
 | Phase 1A commit | `9d1ef3905c6570699f888a0deeacda0d67381147` |
@@ -27,12 +27,13 @@
 | Phase 7B (rc1) commit | `22bb222fa78f6da2c64ae67c0ad8761091e8be57` (`v3.0.0-rc1`) |
 | Phase 7B (rc2) commit | `2091d6d8da26319f0c1e3cea377c5f9b98182c23` (`v3.0.0-rc2`) |
 | Phase 7B (rc3) commit | `83a0c5719de32e56112a24bef764203daacc2934` (`v3.0.0-rc3`) |
+| Phase 8 (PR #4 CI) commit | `00a4e7acdabfbded5e7b103273e06a435501c861` |
 
-| Current phase | Phase 7B — Controlled Staging Preparation, CI Hardening, and Zero-Budget Readiness |
-| Next phase | Production Deployment & Canary Cutover (Awaiting explicit owner approval) |
+| Current phase | Phase 8 — CI Reproducibility, Synthetic Fixtures & Academic Project Finalization |
+| Next phase | Academic Capstone Demonstration & Evaluation |
 
 | Git identity | `Satyam Gupta <sg721642@gmail.com>` |
-| Maintainer | Satyam Gupta |
+| Project Lead & Maintainer | Satyam Gupta |
 
 ## Deployment
 
@@ -47,7 +48,7 @@
 
 ## Current Phase
 
-**Phase 7B — Controlled Staging Preparation, CI Hardening, and Zero-Budget Readiness** ✅ Complete
+**Phase 8 — CI Reproducibility, Synthetic Fixtures & Academic Project Finalization** ✅ Complete
 
 ## Completed Tasks
 
@@ -122,7 +123,7 @@
 
 ### Phase 2B
 - [x] **Infinite Cycle Termination & Bounded Fallback (A05)**: Terminated the infinite circular routing between `llm_agent` and `retriever`. Implemented a strictly bounded DAG with single-visit provider budgets per turn (`retriever` -> `llm_agent` -> `wikipedia` -> `tavily` -> `executor`).
-- [x] **Deterministic Urgent-Risk Emergency Gate**: Added pure offline, zero-dependency emergency screening in `urgent_care.py` and `PlannerAgent`. Immediately returns 911 / 999 / 112 / ED advisories for cardiac, stroke (FAST), respiratory distress, anaphylaxis, severe hemorrhage, and crisis/self-harm without asking triage follow-ups or speculating.
+- [x] **Deterministic Urgent-Risk Emergency Gate**: Added pure offline, zero-dependency emergency screening in `urgent_care.py` and `PlannerAgent`. Immediately returns Indian emergency 112 / 108 / Tele-MANAS 14416 / ED advisories for cardiac, stroke (FAST), respiratory distress, anaphylaxis, severe hemorrhage, and crisis/self-harm without asking triage follow-ups or speculating.
 - [x] **100% Offline Emergency Path**: Verified urgent gate operates independently of external LLMs, vector store, or network services, guaranteeing emergency escalation availability during full service outages.
 - [x] **Elimination of Physician Impersonation (A17)**: Replaced physician personas in `triage_agent.py`, `llm_agent.py`, and `executor.py` with automated educational assistant persona. Explicitly prohibited claims of clinical physician status, in-person examination, or definitive medical diagnosis.
 - [x] **Elimination of Forced Diagnoses & Drug Dosages (A17)**: Replaced forced diagnosis after 3 triage rounds with an educational summary acknowledging uncertainties and advising clinical evaluation. Eliminated all prescription recommendations and drug dosage guidance.
@@ -138,7 +139,7 @@
 - [x] **Unified Result-State Taxonomy (A05)**: Defined consistent result categories: `SUCCESSFUL_EDUCATIONAL`, `SUCCESSFUL_URGENT`, `CLARIFICATION_QUESTION`, `INCONCLUSIVE`, `PROVIDER_UNAVAILABLE`, `PROVIDER_TIMEOUT`, `INTERNAL_ERROR`. Aligned `is_failed_generation`, API success, HTTP status, and database persistence.
 - [x] **External Search Privacy Protection (A08)**: Removed raw question retry fallback from Wikipedia and Tavily agents. Built allowlisted generic medical term extractor (`_MEDICAL_TERM_ALLOWLIST`); if no allowlisted medical terms are identified, external search is declined, completely preventing transmission of unredacted personal symptoms.
 - [x] **Sensitive Transcript & Exception Log Redaction (A08)**: Redacted question text from triage logs (logging character count only). Redacted exception details in `chat_service.py`, `triage_agent.py`, `wikipedia.py`, `tavily.py`, `llm_agent.py`, and `executor.py` (logging `type(e).__name__` only) to prevent credential, prompt, or patient text exposure.
-- [x] **Emergency Localization (A17)**: Added India 112 national emergency and 24/7 mental health crisis helplines (iCall, Vandrevala Foundation) alongside US/CA (911/988), UK (999/111), and EU (112). Added safe default guidance for unlisted countries without inferring country from symptoms.
+- [x] **Emergency Localization (A17)**: Added India 112 national emergency and 24/7 mental health crisis helplines (Tele-MANAS 14416, Vandrevala Foundation, iCall) alongside international emergency guidance. Added safe default guidance for unlisted countries without inferring country from symptoms.
 - [x] **Conservative Clinical Uncertainty (A17)**: Replaced definitive emergency statements with conservative phrasing ("may be experiencing"). Explicitly acknowledged clinical limitations (heuristic screening does not detect 100% of emergencies).
 - [x] **Provenance & HTTPS-Only Citation Validation**: Enforced strict URL scheme validation in `_format_provenance_citations`, accepting only HTTPS URLs and dropping `javascript:`, `data:`, `http:`, and malformed URLs. Escaped Markdown special characters in document titles to prevent link formatting attacks.
 - [x] **Comprehensive Phase 2B.1 Regression Suite**: Added 28 new automated integration tests in `test_phase2b1_corrections.py` and updated `test_agents.py` with privacy tests (total backend suite: 229/229 passing).
@@ -183,7 +184,7 @@
 - [x] **Hardened Multi-Platform Launcher `run.py` & Windows Helper (A14)**: Completely eliminated `torch.__version__ = "2.6.1"` runtime monkeypatch; resolved all paths dynamically relative to `__file__`; eliminated `shell=True` subprocess calls; registered clean `SIGINT`/`SIGTERM` signal handlers to terminate child processes gracefully and eliminate orphaned background workers; added automated `/api/v1/health` readiness polling. Hardened `run_medai.bat` by removing hardcoded models directory blocker and updating branding.
 - [x] **Dependency Consolidation & Pyproject Alignment (A13)**: Renamed project in `backend/pyproject.toml` to `newgenhealthai-backend`, updated author to `Satyam Gupta <sg721642@gmail.com>`, removed unused `tensorflow==2.15.0`, and aligned all dependencies with `requirements.txt`.
 - [x] **First-Party Branding Audit & Comprehensive Reference (A16)**: Conducted full repository branding audit (zero occurrences of `MediGenius`, `imon`, `codix`, or `biswas` in project metadata/code). Explicitly documented deliberate preservation of `susham_health.db` default path for database compatibility. Replaced `.env.example` with comprehensive 113-line configuration reference across 8 structured sections.
-- [x] **Architecture & Contributor Reconciled `README.md` (A16)**: Rewrote root `README.md` with accurate ASCII architecture diagrams, clear educational disclaimers, development setup, Docker usage modes, testing commands, and authentic contributor credits (Satyam Gupta, Khagesh Ranjan, Sudipto Ghosh, Ajitesh Baghel, Yuvraj Singh).
+- [x] **Architecture & Maintainer Reconciled `README.md` (A16)**: Rewrote root `README.md` with accurate ASCII architecture diagrams, clear educational disclaimers, development setup, Docker usage modes, testing commands, and authentic maintainer credit (Satyam Gupta).
 - [x] **Inspected Project Presentation & Report PDFs (A16)**: Inspected tracked project PDFs (`docs/NewGenHealthAI_Project_Presentation.pdf` and `docs/NewGenHealthAI_Final_Project_Report.pdf`); verified both already use `NewGenHealthAI` without legacy strings and preserved them intact.
 - [x] **Comprehensive Phase 4 Regression Suite**: Added 15 new automated tests in `backend/tests/test_phase4_hardening.py` covering voice cancellation, streaming bounds, STT error classification, entrypoints, standalone builds, launcher execution, healthchecks, and `.env.example` coverage (total backend suite: 300/300 passing).
 
@@ -228,6 +229,23 @@
 - [x] **Captured 5 Real Full-Stack Screenshots**: Generated high-resolution screenshots into `docs/screenshots/fullstack/`.
 - [x] **Comprehensive Model & Provider Readiness Inventory**: Evaluated all 12 provider/model components with exact required status vocabulary (`VERIFIED_REAL`, `VERIFIED_MOCK_ONLY`, `CONFIGURED_NOT_TESTED`, `MISSING_ARTIFACT`, `MISSING_CREDENTIAL`, `UNAVAILABLE`, `BLOCKED`).
 
+### Phase 8
+- [x] **Reproducible Backend CI via Git-Tracked Synthetic Fixtures**: Resolved CI test failures on fresh GitHub runners where 25 tests previously failed due to missing uncommitted/ignored images (`genuine_clinical_images/ISIC_000000*.jpg` and `portrait.jpg`). Integrated Git-tracked synthetic image fixtures (`backend/tests/fixtures/synthetic_images/medical_skin_lesion.jpg` and `portrait_human.jpg`).
+- [x] **Ethical Synthetic Image Boundaries**: Established strict rule that synthetic medical-looking images are used solely for upload validation, MIME checking, and safety-gate tests. They are never treated as clinically representative data or used to claim clinical accuracy.
+- [x] **Deterministic Test-Only PBKDF2 Salt Fixture**: Injected isolated deterministic test-only salt in `test_auth_hardening.py` via `test_legacy_pbkdf2_salt_fixture`, preventing dependency on missing or production environment secrets.
+- [x] **Mock Specialist Predictions for Research Mode**: Added controlled mock predictions in test environments (`ENVIRONMENT=test`) to verify research-mode inference endpoints safely without relying on non-deterministic external weights or remote downloads.
+- [x] **Git Ignore Comment Preservation**: Restored original `# Environments` comment in `.gitignore` while strictly preserving `.venv` and `.venv/` ignore rules alongside ethical exclusions of genuine clinical images and portraits.
+- [x] **PR #4 Review & Regression Audit**: Conducted exhaustive audit of all 9 changed files in PR #4 (`backend/app/main.py`, `backend/app/models/message.py`, `backend/tests/conftest.py`, `backend/tests/test_auth_hardening.py`, `backend/tests/test_clinical_gate.py`, `backend/tests/test_endpoint_regression_safety.py`, `backend/tests/test_production_bootstrap_hardening.py`, `.github/workflows/docker-ci.yml`, `.gitignore`). Verified 100% backward compatibility, clean imports, zero regressions, and safe merge readiness.
+- [x] **Triple-Job GitHub Actions CI Pipeline**: Hardened `.github/workflows/docker-ci.yml` across 3 parallel jobs:
+  1. Backend Pytest: Python 3.12, 480 passed (0 failed, 1 warning) in 3m56s.
+  2. Frontend Vitest: Node 20, 36 passed (0 failed) in 17s.
+  3. Docker Smoke Test: Multi-stage build, port 7860, non-root user UID 1000, unauth 401 check, register, session list, new chat in 8m52s.
+  Verified 100% green across all 3 jobs on GitHub Actions Run [#42657594147](https://github.com/sg721642/NewGenHealthAI/actions/runs/42657594147).
+- [x] **Full Backend Suite Expansion**: Expanded verified automated test suite from 310 to **480 passing backend tests** across 23 modules.
+- [x] **Emergency Screening & Indian Number Localization**: Documented pure offline rule-based red-flag screening in `urgent_care.py` prioritizing Indian emergency services (**112**, **108**, **14416** Tele-MANAS).
+- [x] **Fail-Closed Clinical Gate Enforcement**: Re-verified fail-closed specialist gate (`ENABLE_CLINICAL_SPECIALIST_MODELS=false`, returning `clinical_analysis_disabled`).
+- [x] **Ephemeral Container Storage Documentation**: Accurately documented SQLite database ephemeral lifetime on Hugging Face Spaces (resets on container restart unless a persistent volume is attached).
+
 ### Phase 7B
 - [x] **CI Log Sanitization & Token Protection (A18)**: Eliminated stdout dumping of raw auth registration responses in `.github/workflows/docker-ci.yml`. Switched to silent token extraction, length verification, and HTTP status code checks (`200 OK`). Ensured zero credentials or bearer tokens are printed in GitHub Actions logs.
 - [x] **Container Health Readiness Timeout Failure (A18)**: Hardened health polling loop in `.github/workflows/docker-ci.yml` with explicit `exit 1` failure if container fails to report healthy after 30 attempts (60s).
@@ -243,14 +261,14 @@
 
 | Layer | Check | Tests | Exit Code | Result |
 |---|---|---|---|---|
-| Backend | Pytest (Full 23-module suite including `test_phase7a_persistence`, `test_phase6_multiuser_e2e`, `test_phase4_hardening`, `test_phase3b_voice_security`, `test_phase3a_image_security`) | 310 / 310 (0 skipped) | 0 | ✅ Pass (100% passing) |
-| Frontend | Vitest integration (`App.test.jsx`) | 25 / 25 | 0 | ✅ Pass (100% passing) |
-| Frontend | Linter (`npm --prefix frontend run lint`) | 0 errors, 0 warnings | 0 | ✅ Pass (100% clean) |
+| Backend | Pytest (Full 23-module suite including `test_clinical_gate`, `test_auth_hardening`, `test_endpoint_regression_safety`, `test_production_bootstrap_hardening`, `test_phase7a_persistence`, `test_phase6_multiuser_e2e`) | **480 / 480** (0 failed, 1 warning) | 0 | ✅ Pass (100% passing in 26s) |
+| Frontend | Vitest component & integration (`App.test.jsx`, `formatters.test.js`) | **36 / 36** (0 failed) | 0 | ✅ Pass (100% passing in 1.3s) |
+| Frontend | Linter (`npm --prefix frontend run lint`) | **0 errors, 0 warnings** | 0 | ✅ Pass (100% clean) |
 | Frontend | Integrated Build (`npm --prefix frontend run build`) | Vite bundle (to `backend/app/static`) | 0 | ✅ Pass |
-| Frontend | Standalone Build (`npm --prefix frontend run build:standalone`) | Vite bundle (to `frontend/dist`) | 0 | ✅ Pass |
+| Frontend | Standalone Build (`npm --prefix frontend run build:standalone`) | Vite bundle (to `frontend/dist`) | 0 | ✅ Pass (591ms) |
 | Mock Browser QA | Playwright Chromium (`frontend/scripts/browser_qa.cjs`) | 5 viewports, 9 screenshots, 0 overflow, 0 console errors | 0 | ✅ Pass (100% passing) |
 | Full-Stack Browser QA | Playwright Chromium + Real FastAPI + Real SQLite DB (`frontend/scripts/fullstack_browser_qa.cjs`) | 5 viewports, 5 screenshots, 0 console errors, DB verified | 0 | ✅ Pass (100% passing) |
-| Container CI | GitHub Actions Workflow (`.github/workflows/docker-ci.yml`) | Multi-stage Docker build, non-root user (1000), sanitized logs, verified in runs 41330625694 & 41331057430 | 0 | ✅ Pass (100% clean) |
+| Container & Multi-Job CI | GitHub Actions Workflow (`.github/workflows/docker-ci.yml`) | 3 parallel jobs: Backend Pytest (3m56s), Frontend Vitest (17s), Docker Smoke Test (8m52s) on Run #42657594147 | 0 | ✅ Pass (100% green across all 3 jobs) |
 
 ## Database Migration Status
 
@@ -277,5 +295,7 @@
 | Phase | Focus Areas | Status |
 |---|---|---|
 | Phase 7A | Real Container Verification, Full-Stack Acceptance and Controlled Staging Readiness | ✅ Complete |
-| Phase 7B | Controlled Staging Preparation, CI Hardening, and Zero-Budget Readiness | ✅ Complete (Release candidate v3.0.0-rc2 ready; awaiting explicit owner deployment authorization) |
+| Phase 7B | Controlled Staging Preparation, CI Hardening, and Zero-Budget Readiness | ✅ Complete |
+| Phase 8 | CI Reproducibility, Synthetic Fixtures & Academic Project Finalization | ✅ Complete (Verified green on Run #42657594147) |
+| Final Demonstration | Academic Capstone Evaluation, Presentation & Demonstration | 🚀 Ready for Submission |
 
