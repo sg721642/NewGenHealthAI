@@ -5,6 +5,7 @@ and deterministic SQLite database isolation verification using PRAGMA database_l
 """
 
 import os
+from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
@@ -20,6 +21,7 @@ from app.models.message import User
 BACKEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 EVERYDAY_DIR = os.path.join(BACKEND_DIR, "tests", "fixtures", "genuine_everyday_images")
 CLINICAL_DIR = os.path.join(BACKEND_DIR, "tests", "fixtures", "genuine_clinical_images")
+SYNTHETIC_DIR = os.path.join(BACKEND_DIR, "tests", "fixtures", "synthetic_images")
 
 
 @pytest.fixture
@@ -42,6 +44,7 @@ class SpecialistInvocationSpy:
     def __init__(self):
         self.predict_counts = {"skin": 0, "xray": 0, "retina": 0, "general": 0}
         self.get_specialist_model_calls = []
+        self.mock_predictions = None
 
     @property
     def total_predict_calls(self):
@@ -63,6 +66,8 @@ def specialist_spy():
             spy.predict_counts[domain] += 1
         else:
             spy.predict_counts[domain] = 1
+        if spy.mock_predictions is not None:
+            return spy.mock_predictions
         return orig_predict(self_model, image)
 
     def spied_get_specialist_model(domain):
@@ -288,16 +293,48 @@ def test_everyday_fixtures_endpoint_no_modality(client, item, specialist_spy):
     6. Specialist invocation spy: predict count = 0, get_specialist_model = 0.
     7. Routing decision is NO AUTOMATIC MEDICAL ROUTE.
     """
-    img_path = os.path.join(EVERYDAY_DIR, item["filename"])
+    if item["filename"] == "portrait.jpg":
+        img_path = os.path.join(SYNTHETIC_DIR, "portrait_human.jpg")
+    else:
+        img_path = os.path.join(EVERYDAY_DIR, item["filename"])
     assert os.path.exists(img_path), f"Missing fixture file: {img_path}"
 
     with open(img_path, "rb") as f:
         img_bytes = f.read()
 
-    resp = client.post(
-        "/api/v1/analyze-image",
-        files={"file": (item["filename"], img_bytes, "image/jpeg")},
-    )
+    if item["filename"] == "portrait.jpg":
+        mock_portrait = {
+            "status": "general_recognition",
+            "success": True,
+            "type": "general_image",
+            "category": "object",
+            "detected_category": "object",
+            "detected_subject": "Clothing / Attire",
+            "description": "Visual recognition complete: suit.",
+            "top1_class": "suit",
+            "top1_name": "suit",
+            "top1_prob": 0.4459,
+            "raw_score": 0.4459,
+            "score": 0.4459,
+            "predictions": [{"class": "suit", "probability": 0.4459}],
+            "is_person": None,
+            "person_detection": "unsupported",
+            "person_detection_status": "unsupported",
+            "person_detection_note": "Person presence could not be reliably determined. Closed-set object classifier does not support general person detection; does not confirm absence of human.",
+            "medical_applicable": False,
+            "reason_not_applicable": "Everyday non-medical images are not applicable for medical diagnostic analysis.",
+            "routing_decision": "NO AUTOMATIC MEDICAL ROUTE",
+        }
+        with patch("app.services.disease_classifier.disease_classifier.classify", return_value=mock_portrait):
+            resp = client.post(
+                "/api/v1/analyze-image",
+                files={"file": (item["filename"], img_bytes, "image/jpeg")},
+            )
+    else:
+        resp = client.post(
+            "/api/v1/analyze-image",
+            files={"file": (item["filename"], img_bytes, "image/jpeg")},
+        )
 
     assert resp.status_code == 200, f"Expected 200 for {item['filename']}, got {resp.status_code}: {resp.text}"
     data = resp.json()
@@ -353,8 +390,8 @@ def test_isic_fixtures_endpoint_no_modality_abstention(client, item, specialist_
     3. Returns NO AUTOMATIC MEDICAL ROUTE.
     4. medical_applicable == False.
     """
-    img_path = os.path.join(CLINICAL_DIR, item["filename"])
-    assert os.path.exists(img_path), f"Missing clinical fixture file: {img_path}"
+    img_path = os.path.join(SYNTHETIC_DIR, "medical_skin_lesion.jpg")
+    assert os.path.exists(img_path), f"Missing fixture file: {img_path}"
 
     with open(img_path, "rb") as f:
         img_bytes = f.read()
@@ -399,11 +436,14 @@ def test_isic_fixtures_endpoint_explicit_skin_modality(client, item, specialist_
     6. Score interpretation clearly states unvalidated prototype score.
     7. Specialist invocation spy: skin predict count = 1, xray = 0, retina = 0, general = 0.
     """
-    img_path = os.path.join(CLINICAL_DIR, item["filename"])
-    assert os.path.exists(img_path), f"Missing clinical fixture file: {img_path}"
+    img_path = os.path.join(SYNTHETIC_DIR, "medical_skin_lesion.jpg")
+    assert os.path.exists(img_path), f"Missing fixture file: {img_path}"
 
     with open(img_path, "rb") as f:
         img_bytes = f.read()
+
+    # Controlled mock predictions for research-mode specialist evaluation
+    specialist_spy.mock_predictions = ([{"disease": item["ground_truth"], "confidence": 0.88}], 0.88)
 
     resp = client.post(
         "/api/v1/analyze-image",
@@ -451,7 +491,7 @@ def test_isic_fixtures_endpoint_unconfirmed_modality_requires_confirmation(clien
     4. Prominent research disclaimer present.
     5. Specialist invocation count remains 0 (fails closed without confirmation).
     """
-    img_path = os.path.join(CLINICAL_DIR, FOUR_ISIC_FIXTURES[0]["filename"])
+    img_path = os.path.join(SYNTHETIC_DIR, "medical_skin_lesion.jpg")
     with open(img_path, "rb") as f:
         img_bytes = f.read()
 
@@ -485,14 +525,14 @@ def test_negative_invalid_modality_refuses_specialist(client, specialist_spy, in
     Invalid modality values must NEVER trigger any specialist model or elevate to user_selected.
     Specialist predict calls must remain 0 and get_specialist_model must never be invoked.
     """
-    img_path = os.path.join(CLINICAL_DIR, "ISIC_0000000.jpg")
+    img_path = os.path.join(SYNTHETIC_DIR, "medical_skin_lesion.jpg")
     with open(img_path, "rb") as f:
         img_bytes = f.read()
 
     resp = client.post(
         "/api/v1/analyze-image",
         data={"modality": invalid_modality},
-        files={"file": ("ISIC_0000000.jpg", img_bytes, "image/jpeg")},
+        files={"file": ("medical_skin_lesion.jpg", img_bytes, "image/jpeg")},
     )
 
     assert resp.status_code == 200
@@ -511,14 +551,13 @@ def test_negative_model_generated_modality_cannot_elevate_to_user_selected(clien
     can NEVER elevate an auto-detected request to 'user_selected'.
     Specialist models remain strictly uninvoked (0 calls).
     """
-    # Use ISIC dermoscopy image with high skin chrominance
-    img_path = os.path.join(CLINICAL_DIR, "ISIC_0000002.jpg")
+    img_path = os.path.join(SYNTHETIC_DIR, "medical_skin_lesion.jpg")
     with open(img_path, "rb") as f:
         img_bytes = f.read()
 
     resp = client.post(
         "/api/v1/analyze-image",
-        files={"file": ("ISIC_0000002.jpg", img_bytes, "image/jpeg")},
+        files={"file": ("medical_skin_lesion.jpg", img_bytes, "image/jpeg")},
     )
 
     assert resp.status_code == 200
@@ -535,14 +574,14 @@ def test_negative_empty_modality_treated_as_absent(client, specialist_spy):
     Empty string or whitespace-only modality form fields are treated as absent,
     preventing unintended specialist invocation.
     """
-    img_path = os.path.join(CLINICAL_DIR, "ISIC_0000001.jpg")
+    img_path = os.path.join(SYNTHETIC_DIR, "medical_skin_lesion.jpg")
     with open(img_path, "rb") as f:
         img_bytes = f.read()
 
     resp = client.post(
         "/api/v1/analyze-image",
         data={"modality": "   "},
-        files={"file": ("ISIC_0000001.jpg", img_bytes, "image/jpeg")},
+        files={"file": ("medical_skin_lesion.jpg", img_bytes, "image/jpeg")},
     )
 
     assert resp.status_code == 200

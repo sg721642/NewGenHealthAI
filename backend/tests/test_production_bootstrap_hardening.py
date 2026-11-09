@@ -26,8 +26,8 @@ PYTHON_EXE = sys.executable
 EVERYDAY_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "fixtures", "genuine_everyday_images")
 )
-CLINICAL_DIR = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "fixtures", "genuine_clinical_images")
+SYNTHETIC_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "fixtures", "synthetic_images")
 )
 
 
@@ -229,14 +229,14 @@ def test_production_health_endpoint_and_mobilenet_recognition():
                 assert img_data.get("detected_category") == "plant"
 
                 # 3. Verify clinical specialist request is disabled in production
-                isic_path = os.path.join(CLINICAL_DIR, "ISIC_0000000.jpg")
-                with open(isic_path, "rb") as f:
-                    isic_bytes = f.read()
+                skin_test_path = os.path.join(SYNTHETIC_DIR, "medical_skin_lesion.jpg")
+                with open(skin_test_path, "rb") as f:
+                    skin_bytes = f.read()
 
                 clin_resp = client.post(
                     "/api/v1/analyze-image",
                     data={"modality": "skin"},
-                    files={"file": ("ISIC_0000000.jpg", isic_bytes, "image/jpeg")},
+                    files={"file": ("medical_skin_lesion.jpg", skin_bytes, "image/jpeg")},
                 )
                 assert clin_resp.status_code == 200
                 clin_data = clin_resp.json()
