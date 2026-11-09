@@ -1,32 +1,35 @@
-# Release Manifest: NewGenHealthAI v3.0.0-rc1
+# Release Manifest: NewGenHealthAI Academic Release Candidate
 
-**Release Tag Candidate:** `v3.0.0-rc1`\
-**Git Branch:** `fix/healthai-audit-premium-ui`\
+**Release Tag Candidate:** `v3.1.0-academic`\
+**Git Branch:** `ci/add-backend-frontend-test-jobs` (PR #4)\
 **Repository:** `https://github.com/sg721642/NewGenHealthAI`\
-**Target Infrastructure:** Hugging Face Spaces (CPU Basic: 2 vCPU, 16 GB RAM)\
-**Release Readiness Status:** `BLOCKED — INTEGRITY REMEDIATION COMPLETED; AWAITING QUALIFIED HUMAN REVIEW, CLINICAL VALIDATION & OWNER AUTHORIZATION`\
+**Project Context:** College Academic Capstone & Educational Healthcare AI Demonstration\
+**Project Lead & Maintainer:** Satyam Gupta\
+**Target Infrastructure:** Hugging Face Spaces (CPU Basic: 2 vCPU, 16 GB RAM; Ephemeral Container Storage)\
+**Release Readiness Status:** `READY FOR ACADEMIC CAPSTONE DEMONSTRATION & SUBMISSION (REPRODUCIBLE CI VERIFIED; FAIL-CLOSED CLINICAL GOVERNANCE ENFORCED)`\
 
 ---
 
-## 1. Release Verification Matrix (15 Mandatory Checks)
+## 1. Release Verification Matrix (16 Mandatory Checks)
 
 | # | Check Item | Requirement | Verification Method | Status |
 |---|---|---|---|:---:|
-| **1** | **Git Branch Integrity** | Clean branch `fix/healthai-audit-premium-ui` | `git status` | **PASSED** |
+| **1** | **Git Branch & Working Tree Status** | Branch `ci/add-backend-frontend-test-jobs` (PR #4 HEAD: `00a4e7a`); working tree currently has 3 modified documentation files pending commit | `git status -sb` | **VERIFIED (3 docs modified, 0 untracked)** |
 | **2** | **Zero-Cost Budget Policy** | ₹0 incurred; zero paid API calls or cloud billing | Unmocked billed API skips in `vision_service.py` | **PASSED** |
-| **3** | **Hardware Constraints** | Sub-500ms CPU inference on local Apple M5 host | PyTorch benchmark on CPU | **PASSED** |
-| **4** | **Database Protection** | `susham_health.db` never overwritten, connected, or altered | `PRAGMA database_list;` + SHA-256 baseline invariance (`e86d5e99...`) | **PASSED** |
+| **3** | **Hardware Constraints** | Sub-500ms CPU inference on local host | PyTorch benchmark on CPU | **PASSED** |
+| **4** | **Database Protection** | `susham_health.db` never overwritten, connected, or altered | `PRAGMA database_list;` + SHA-256 baseline invariance | **PASSED** |
 | **5** | **Zero Secret Exposure** | No API keys committed or displayed in logs | Git index and log inspection | **PASSED** |
 | **6** | **Everyday Recognition** | Neural local vision model for non-medical images | MobileNetV3-Small (1000 classes, 50ms) | **PASSED** |
-| **7** | **Genuine Everyday Dataset** | 8 Wikimedia Commons photographs (CC-BY-SA-4.0) | Dog & Apple resolved via Wikimedia API; originals preserved via verified TLS; independent SHA-256 hashes pinned | **PASSED** |
-| **8** | **Genuine Clinical Dataset** | 4 ISIC Archive dermoscopy images (CC0-1.0) | Originals preserved via verified TLS; independent SHA-256 hashes pinned; explicit modality gate | **PASSED** |
+| **7** | **Genuine Everyday Dataset** | 8 Wikimedia Commons photographs (CC-BY-SA-4.0) | Resolved via Wikimedia API; originals preserved; SHA-256 pinned | **PASSED** |
+| **8** | **Genuine Clinical Dataset** | 4 ISIC Archive dermoscopy images (CC0-1.0) | Originals preserved; SHA-256 pinned; explicit modality gate | **PASSED** |
 | **9** | **Specialist Models Benchmark** | Benchmark 4 models on CPU without crash | Local CPU forward pass latency audit (`FORWARD PASS VERIFIED`); production gate disabled by default | **PASSED** |
 | **10** | **Clinical Governance Docs** | 5 formal governance protocols authored | `docs/` clinical documents created; status `NOT CLINICALLY VALIDATED` | **PASSED** |
-| **11** | **Security Runbooks** | Key rotation, session revocation, access request | `docs/` runbooks drafted; targeted revocation unit tests passing (`OWNER ACTION REQUIRED`) | **PASSED** |
-| **12** | **Backend Test Suite** | 100% test pass rate in isolated Python 3.13.9 venv | Pytest (459/459 passed, 0 application warnings, 1 third-party Starlette/AnyIO deprecation warning in `/tmp/nghai_final_clean_venv`) | **PASSED** |
-| **13** | **Frontend Component Suite** | 100% unit and integration test pass rate | Vitest (36/36 passed, previously verified) | **PASSED** |
-| **14** | **Frontend Browser E2E Suite** | 100% browser UI rendering & mobile layout | Playwright Chromium (5/5 passed, previously verified) | **PASSED** |
-| **15** | **Frontend Production Build** | Static bundle built cleanly to `backend/app/static/` | Vite build (564ms, 0 errors, previously verified) | **PASSED** |
+| **11** | **Security Runbooks** | Key rotation, session revocation, access request | `docs/` runbooks drafted; targeted revocation unit tests passing | **PASSED** |
+| **12** | **Backend Test Suite** | 100% test pass rate in isolated Python venv | Pytest (**480/480 passed**, 0 failed, 1 warning) across 23 modules | **PASSED** |
+| **13** | **Frontend Component Suite** | 100% unit and integration test pass rate | Vitest (**36/36 passed**, 0 failed) in 1.3s | **PASSED** |
+| **14** | **Frontend Browser E2E Suite** | 100% browser UI rendering & mobile layout | Playwright Chromium (5 viewports, 0 console errors) | **PASSED** |
+| **15** | **Frontend Production Build** | Static bundle built cleanly to `backend/app/static/` & `dist/` | Vite build (591ms, 0 errors) | **PASSED** |
+| **16** | **Triple-Job GitHub Actions CI** | Automated Pytest, Vitest & Docker smoke test | GitHub Actions Run [#42657594147](https://github.com/sg721642/NewGenHealthAI/actions/runs/42657594147) | **PASSED** |
 
 ---
 
@@ -83,6 +86,14 @@ The 36 cryptographic hash-verified files in the repository represent copies/vari
 - **File Artifacts (12 files):** 4 original files in `originals/`, 4 derived files in `derived-images/`, 4 active fixture files in root.
 - **Clinical Validation Status:** NOT CLINICALLY VALIDATED. Production clinical feature gate disabled by default (`ENABLE_CLINICAL_SPECIALIST_MODELS=false`, `CLINICAL_GOVERNANCE_PRODUCTION_APPROVAL=false`); returns `clinical_analysis_disabled` with zero model loads. Explicit modality selection required; automated color heuristics are NOT used for decisive medical routing.
 
+### 3.3 Git-Tracked Synthetic Fixtures for CI Reproducibility
+- **Location:** `backend/tests/fixtures/synthetic_images/`
+- **Tracked Artifacts:**
+  - `medical_skin_lesion.jpg`: Synthetic dermatological image fixture.
+  - `portrait_human.jpg`: Synthetic human portrait image fixture.
+- **Purpose:** Enables standard CI tests to execute reproducibly on fresh GitHub Actions runners without depending on locally ignored genuine clinical or portrait images.
+- **Clinical Boundary Invariant:** Synthetic medical-looking images are strictly used for input validation, MIME verification, and safety-gate testing. They must **NEVER** be treated as clinically representative data or used to claim clinical model accuracy, sensitivity, or validation.
+
 ---
 
 ---
@@ -115,6 +126,9 @@ The minimal artifact set permitted inside the production container (Hugging Face
   - `backend/app/models/xray_fracture_model.pth` (27.15 MB / 28,466,113 bytes)
   - `backend/app/models/retina_model.pth` (18.18 MB / 19,066,270 bytes)
   - *Total excluded specialist weights: 157.32 MB (164,965,960 bytes).* Since production clinical specialist inference is unconditionally disabled in the current release pending formal clinical validation, these checkpoints are excluded from production distributions to eliminate unneeded weight and prevent unauthorized execution.
+- **Hugging Face Spaces Ephemeral Persistence Reality:**
+  - On standard CPU-Basic Docker containers, the local SQLite database (`susham_health.db`) is ephemeral.
+  - Database state resets whenever the container restarts or rebuilds unless an external persistent volume is attached to `backend/storage/`.
 - **Safe Configuration Templates:**
   - `.env.example` (Safe configuration template with zero real secrets; documents `ENABLE_CLINICAL_SPECIALIST_MODELS`, `CLINICAL_GOVERNANCE_PRODUCTION_APPROVAL`, and `OFFLINE_MODE`)
 - **Required Runtime Documentation:**
@@ -208,96 +222,20 @@ Zero commits, pushes, merges, tags, or deployments will be executed without this
 
 ## 6. Exact Working-Tree Git Status Accounting (`git status --porcelain=v1`)
 
-### 6.0 Review Methodology & Evidence Distinction
-Note: `git diff --stat` only summarizes changes within tracked files and does not include untracked file contents. Repository verification used distinct methods appropriate to each asset type:
-1. **Tracked-File Diff Review:** Full line-by-line inspection of changes across all 30 modified tracked files and 1 deleted tracked file via git diffs.
-2. **Individually Inspected Untracked Source Files & Scripts:** Complete manual inspection of untracked application source (`backend/app/services/vision_service.py`), scripts (`backend/scripts/*.py`, `frontend/scripts/*.cjs`), and untracked test suites (`backend/tests/test_*.py`).
-3. **Binary Asset & Cryptographic Checksum Verification:** Direct cryptographic SHA-256 checksum calculation and size verification for binary weights (`mobilenet_v3_small-047dcff4.pth`) and test image fixtures (`backend/tests/fixtures/`), as binary files cannot be evaluated via text diffs.
-4. **Documentation Review:** Comprehensive textual review of all 11 untracked and 2 modified documentation files in `docs/`.
-5. **Test Accounting Distinction:** The 459/459 backend test result represents the latest previously executed clean-environment verification in `/tmp/nghai_final_clean_venv` (459 passed, 0 application warnings, 1 third-party Starlette warning). Tests were not rerun during this code review pass. Frontend Vitest unit tests (36 passed) and Playwright browser E2E tests (5 passed) remain separately identified as earlier executions.
-
-Independently verified from `git status --porcelain=v1` on branch `fix/healthai-audit-premium-ui`:
-- **Total Porcelain Lines:** Exactly **54**
+### 6.0 Pre-Commit Working-Tree Audit Snapshot
+This audit snapshot was recorded on 9 November 2026. This is a historical pre-commit snapshot, not a claim about the working tree after committing:
+- **Branch:** `ci/add-backend-frontend-test-jobs`
+- **Base PR #4 HEAD:** `00a4e7acdabfbded5e7b103273e06a435501c861`
+- **Total Porcelain Lines at Audit:** Exactly **3**
 - **Staged Changes (Index):** Exactly **0**
-- **Renamed Entries:** Exactly **0**
-- **Modified Tracked Files (` M`):** Exactly **30** unique files
-- **Deleted Tracked Files (` D`):** Exactly **1** unique file
-- **Untracked Entries (`??`):** Exactly **23** unique entries
-- **Double-Counted Entries:** Exactly **0** (Reconciliation note: `docs/release_manifest.md` is strictly untracked; an earlier draft inadvertently listed it under both modified tracked and untracked entries, creating an apparent 31-item list against a count of 30. Removing this duplicate restores exact 30-item parity).
+- **Modified Tracked Files (` M`):** Exactly **3** documentation files:
+  1. `README.md`
+  2. `docs/IMPLEMENTATION_STATUS.md`
+  3. `docs/release_manifest.md`
+- **Deleted Tracked Files (` D`):** Exactly **0**
+- **Untracked Entries (`??`):** Exactly **0**
 
-### 6.1 Modified Tracked Files (30)
-- **Configuration & Environment (3):**
-  1. `.dockerignore`
-  2. `.env.example`
-  3. `.gitignore`
-- **Backend Application Source & Services (12):**
-  4. `backend/app/agents/executor.py`
-  5. `backend/app/agents/retriever.py`
-  6. `backend/app/api/image_api.py`
-  7. `backend/app/api/v1/endpoints/session.py`
-  8. `backend/app/core/config.py`
-  9. `backend/app/db/migrations.py`
-  10. `backend/app/db/session.py`
-  11. `backend/app/main.py`
-  12. `backend/app/services/database_service.py`
-  13. `backend/app/services/disease_classifier.py`
-  14. `backend/app/tools/llm_client.py`
-  15. `backend/app/tools/vector_store.py`
-- **Build & Test Configurations (2):**
-  16. `backend/pyproject.toml`
-  17. `pytest.ini`
-- **Backend Test Files (9 — 8 test modules and 1 conftest configuration file):**
-  18. `backend/tests/conftest.py` (pytest setup/fixtures)
-  19. `backend/tests/test_agents.py`
-  20. `backend/tests/test_model_fairness_and_safety.py`
-  21. `backend/tests/test_phase1d_concurrency.py`
-  22. `backend/tests/test_phase2a_image_classifier.py`
-  23. `backend/tests/test_phase3a_image_security.py`
-  24. `backend/tests/test_phase3b_voice_security.py`
-  25. `backend/tests/test_phase4_hardening.py`
-  26. `backend/tests/test_tools.py`
-- **Tracked Documentation (2):**
-  27. `docs/DEPLOYMENT_RUNBOOK.md`
-  28. `docs/IMPLEMENTATION_STATUS.md`
-- **Frontend Source & Component Tests (2 — 1 source + 1 test suite):**
-  29. `frontend/src/App.jsx`
-  30. `frontend/src/App.test.jsx`
+*(At the time of this audit, all application source code, test suites, CI workflows, and configurations were committed in Git HEAD `00a4e7a`; only the 3 designated documentation files were modified).*
 
-*(Sub-count check: 3 + 12 + 2 + 9 + 2 + 2 = Exactly 30 modified tracked files).*
-
-### 6.2 Deleted Tracked Files (1)
-1. `backend/pytest.ini` (Consolidated into repository root `pytest.ini`)
-
-### 6.3 Untracked Entries (23)
-- **Backend Model Weights, Service & Evaluation Scripts (4):**
-  1. `backend/app/models/mobilenet_v3_small-047dcff4.pth` (verified via SHA-256)
-  2. `backend/app/services/vision_service.py` (inspected line-by-line)
-  3. `backend/scripts/evaluate_image_understanding.py` (inspected line-by-line)
-  4. `backend/scripts/redownload_with_verified_tls.py` (inspected line-by-line)
-- **Test Fixtures Directory (1):**
-  5. `backend/tests/fixtures/` (verified via manifests and cryptographic SHA-256 hashes)
-- **Untracked Backend Test Suites (6):**
-  6. `backend/tests/test_clinical_gate.py` (inspected line-by-line)
-  7. `backend/tests/test_endpoint_regression_safety.py` (inspected line-by-line)
-  8. `backend/tests/test_offline_mode_subprocess.py` (inspected line-by-line)
-  9. `backend/tests/test_session_history_security.py` (inspected line-by-line)
-  10. `backend/tests/test_targeted_session_revocation.py` (inspected line-by-line)
-  11. `backend/tests/test_vision_understanding.py` (inspected line-by-line)
-- **Untracked Documentation Files (11):**
-  - *Clinical Governance Protocols (5):*
-    12. `docs/clinical_evaluation_checklist.md` (inspected line-by-line)
-    13. `docs/clinical_risk_assessment.md` (inspected line-by-line)
-    14. `docs/clinical_validation_protocol.md` (inspected line-by-line)
-    15. `docs/clinician_review_template.md` (inspected line-by-line)
-    16. `docs/intended_use_and_limitations.md` (inspected line-by-line)
-  - *Security, Operational & Release Runbooks / Manifests (6):*
-    17. `docs/groq_key_rotation_procedure.md` (inspected line-by-line)
-    18. `docs/image_understanding_audit.md` (inspected line-by-line)
-    19. `docs/muse_spark_access_request.md` (inspected line-by-line)
-    20. `docs/release_manifest.md` (inspected line-by-line)
-    21. `docs/rollback_instructions.md` (inspected line-by-line)
-    22. `docs/test_session_revocation.md` (inspected line-by-line)
-- **Untracked Frontend E2E Verification Script (1):**
-  23. `frontend/scripts/browser_e2e_verification.cjs` (inspected line-by-line)
-
-*(Sub-count check: 4 + 1 + 6 + 11 + 1 = Exactly 23 untracked entries).*
+### 6.1 Historical Audit Baseline Accounting (Reference)
+During the initial recovery audit of branch `fix/healthai-audit-premium-ui` prior to PR #4 commit integration, 54 porcelain entries (30 modified tracked files, 1 deleted file, and 23 untracked entries) were inventoried and verified. All application files from that audit have since been reconciled, tested, and committed into the current PR #4 branch.

@@ -107,12 +107,11 @@ def test_argon2id_verification_and_rejection():
 def test_legacy_password_verification_and_automatic_rehash(client):
     """
     Users with legacy PBKDF2 hashes are successfully authenticated using
-    LEGACY_PBKDF2_SALT and their hash is transparently upgraded to Argon2id.
+    an isolated synthetic LEGACY_PBKDF2_SALT and their hash is transparently upgraded to Argon2id.
     """
-    legacy_salt = config.LEGACY_PBKDF2_SALT
-    assert legacy_salt is not None, "LEGACY_PBKDF2_SALT must be configured in environment for migration"
+    test_salt = b"deterministic_synthetic_legacy_salt_ci"
     raw_pass = "LegacyDoctorPass888!"
-    legacy_hash = hashlib.pbkdf2_hmac("sha256", raw_pass.encode("utf-8"), legacy_salt, 100000).hex()
+    legacy_hash = hashlib.pbkdf2_hmac("sha256", raw_pass.encode("utf-8"), test_salt, 100000).hex()
 
     uname = f"legacy_user_{uuid.uuid4().hex[:6]}"
     with db_service.get_session() as session:
@@ -127,12 +126,14 @@ def test_legacy_password_verification_and_automatic_rehash(client):
         assert u.hashed_password == legacy_hash
         assert not u.hashed_password.startswith("$argon2")
 
-    # Perform login via API
-    res = client.post("/api/v1/auth/login", json={"username": uname, "password": raw_pass})
-    assert res.status_code == 200
-    data = res.json()
-    assert data["success"] is True
-    assert "token" in data
+    # Perform login via API with isolated synthetic legacy salt
+    with patch("app.api.v1.endpoints.auth.LEGACY_PBKDF2_SALT", test_salt), \
+         patch("app.core.config.LEGACY_PBKDF2_SALT", test_salt):
+        res = client.post("/api/v1/auth/login", json={"username": uname, "password": raw_pass})
+        assert res.status_code == 200
+        data = res.json()
+        assert data["success"] is True
+        assert "token" in data
 
     # Verify that stored hash was automatically rehashed to Argon2id in database
     with db_service.get_session() as session:

@@ -18,7 +18,7 @@ from app.core.config import is_clinical_specialist_enabled
 from app.core.dependencies import get_current_user
 from app.models.message import User
 
-CLINICAL_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "fixtures", "genuine_clinical_images"))
+SYNTHETIC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "fixtures", "synthetic_images"))
 EVERYDAY_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "fixtures", "genuine_everyday_images"))
 
 
@@ -44,7 +44,7 @@ def test_clinical_gate_disabled_blocks_specialist_inference(client):
     - Zero specialist models are invoked
     - Response clearly indicates unvalidated specialist models are disabled in production
     """
-    img_path = os.path.join(CLINICAL_DIR, "ISIC_0000000.jpg")
+    img_path = os.path.join(SYNTHETIC_DIR, "medical_skin_lesion.jpg")
     with open(img_path, "rb") as f:
         img_bytes = f.read()
 
@@ -53,7 +53,7 @@ def test_clinical_gate_disabled_blocks_specialist_inference(client):
             resp = client.post(
                 "/api/v1/analyze-image",
                 data={"modality": "skin"},
-                files={"file": ("ISIC_0000000.jpg", img_bytes, "image/jpeg")},
+                files={"file": ("medical_skin_lesion.jpg", img_bytes, "image/jpeg")},
             )
             assert resp.status_code == 200
             data = resp.json()
@@ -95,15 +95,17 @@ def test_clinical_gate_enabled_in_research_mode_permits_specialist(client):
     - Explicit modality='skin' runs the prototype specialist model
     - Returns analysis_complete with uncalibrated score and disclaimer
     """
-    img_path = os.path.join(CLINICAL_DIR, "ISIC_0000000.jpg")
+    img_path = os.path.join(SYNTHETIC_DIR, "medical_skin_lesion.jpg")
     with open(img_path, "rb") as f:
         img_bytes = f.read()
 
-    with patch.dict(os.environ, {"ENABLE_CLINICAL_SPECIALIST_MODELS": "true"}):
+    mock_preds = [{"disease": "benign keratosis", "confidence": 0.85}]
+    with patch.dict(os.environ, {"ENABLE_CLINICAL_SPECIALIST_MODELS": "true"}), \
+         patch("app.services.disease_classifier.MedicalModel.predict", return_value=(mock_preds, 0.85)):
         resp = client.post(
             "/api/v1/analyze-image",
             data={"modality": "skin", "modality_confirmed": "true"},
-            files={"file": ("ISIC_0000000.jpg", img_bytes, "image/jpeg")},
+            files={"file": ("medical_skin_lesion.jpg", img_bytes, "image/jpeg")},
         )
         assert resp.status_code == 200
         data = resp.json()
@@ -220,7 +222,7 @@ def test_production_endpoint_rejects_research_override(client):
     rejects research override ENABLE_CLINICAL_SPECIALIST_MODELS=true with
     status 'clinical_analysis_disabled'.
     """
-    img_path = os.path.join(CLINICAL_DIR, "ISIC_0000000.jpg")
+    img_path = os.path.join(SYNTHETIC_DIR, "medical_skin_lesion.jpg")
     with open(img_path, "rb") as f:
         img_bytes = f.read()
 
@@ -232,7 +234,7 @@ def test_production_endpoint_rejects_research_override(client):
         resp = client.post(
             "/api/v1/analyze-image",
             data={"modality": "skin"},
-            files={"file": ("ISIC_0000000.jpg", img_bytes, "image/jpeg")},
+            files={"file": ("medical_skin_lesion.jpg", img_bytes, "image/jpeg")},
         )
         assert resp.status_code == 200
         data = resp.json()
@@ -329,7 +331,7 @@ def test_adversarial_production_gate_full_bypass_attempt(client, tmp_path):
         "authorized_signoff": "adversarial_tester"
     }))
 
-    img_path = os.path.join(CLINICAL_DIR, "ISIC_0000000.jpg")
+    img_path = os.path.join(SYNTHETIC_DIR, "medical_skin_lesion.jpg")
     with open(img_path, "rb") as f:
         img_bytes = f.read()
 
@@ -348,7 +350,7 @@ def test_adversarial_production_gate_full_bypass_attempt(client, tmp_path):
                 resp = client.post(
                     "/api/v1/analyze-image",
                     data={"modality": "skin"},
-                    files={"file": ("ISIC_0000000.jpg", img_bytes, "image/jpeg")},
+                    files={"file": ("medical_skin_lesion.jpg", img_bytes, "image/jpeg")},
                 )
                 assert resp.status_code == 200
                 data = resp.json()

@@ -26,8 +26,8 @@ PYTHON_EXE = sys.executable
 EVERYDAY_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "fixtures", "genuine_everyday_images")
 )
-CLINICAL_DIR = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "fixtures", "genuine_clinical_images")
+SYNTHETIC_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "fixtures", "synthetic_images")
 )
 
 
@@ -204,46 +204,47 @@ def test_production_health_endpoint_and_mobilenet_recognition():
         setattr(auth_user, "user_id", 999)
         app.dependency_overrides[get_current_user] = lambda: auth_user
 
-        with TestClient(app) as client:
-            # 1. Verify health endpoint
-            health_resp = client.get("/api/v1/health")
-            assert health_resp.status_code == 200
-            assert health_resp.json().get("status") == "healthy"
+        try:
+            with TestClient(app) as client:
+                # 1. Verify health endpoint
+                health_resp = client.get("/api/v1/health")
+                assert health_resp.status_code == 200
+                assert health_resp.json().get("status") == "healthy"
 
-            # 2. Verify everyday MobileNetV3 recognition works
-            sunflower_path = os.path.join(EVERYDAY_DIR, "sunflower.jpg")
-            with open(sunflower_path, "rb") as f:
-                img_bytes = f.read()
+                # 2. Verify everyday MobileNetV3 recognition works
+                sunflower_path = os.path.join(EVERYDAY_DIR, "sunflower.jpg")
+                with open(sunflower_path, "rb") as f:
+                    img_bytes = f.read()
 
-            img_resp = client.post(
-                "/api/v1/analyze-image",
-                data={"modality": "auto"},
-                files={"file": ("sunflower.jpg", img_bytes, "image/jpeg")},
-            )
-            assert img_resp.status_code == 200
-            img_data = img_resp.json()
-            assert img_data["status"] == "general_recognition"
-            assert img_data["success"] is True
-            assert img_data["medical_applicable"] is False
-            assert img_data.get("detected_category") == "plant"
+                img_resp = client.post(
+                    "/api/v1/analyze-image",
+                    data={"modality": "auto"},
+                    files={"file": ("sunflower.jpg", img_bytes, "image/jpeg")},
+                )
+                assert img_resp.status_code == 200
+                img_data = img_resp.json()
+                assert img_data["status"] == "general_recognition"
+                assert img_data["success"] is True
+                assert img_data["medical_applicable"] is False
+                assert img_data.get("detected_category") == "plant"
 
-            # 3. Verify clinical specialist request is disabled in production
-            isic_path = os.path.join(CLINICAL_DIR, "ISIC_0000000.jpg")
-            with open(isic_path, "rb") as f:
-                isic_bytes = f.read()
+                # 3. Verify clinical specialist request is disabled in production
+                skin_test_path = os.path.join(SYNTHETIC_DIR, "medical_skin_lesion.jpg")
+                with open(skin_test_path, "rb") as f:
+                    skin_bytes = f.read()
 
-            clin_resp = client.post(
-                "/api/v1/analyze-image",
-                data={"modality": "skin"},
-                files={"file": ("ISIC_0000000.jpg", isic_bytes, "image/jpeg")},
-            )
-            assert clin_resp.status_code == 200
-            clin_data = clin_resp.json()
-            assert clin_data["status"] == "clinical_analysis_disabled"
-            assert clin_data["clinical_governance_status"] == "NOT_CLINICALLY_VALIDATED"
-            assert clin_data["medical_applicable"] is False
-
-        app.dependency_overrides.pop(get_current_user, None)
+                clin_resp = client.post(
+                    "/api/v1/analyze-image",
+                    data={"modality": "skin"},
+                    files={"file": ("medical_skin_lesion.jpg", skin_bytes, "image/jpeg")},
+                )
+                assert clin_resp.status_code == 200
+                clin_data = clin_resp.json()
+                assert clin_data["status"] == "clinical_analysis_disabled"
+                assert clin_data["clinical_governance_status"] == "NOT_CLINICALLY_VALIDATED"
+                assert clin_data["medical_applicable"] is False
+        finally:
+            app.dependency_overrides.pop(get_current_user, None)
 
 
 def test_development_override_preserves_local_workflows():
